@@ -430,6 +430,14 @@ class MADRLAgent:
         if not training:
             self.exploration_noise = 0.0  # No exploration during evaluation
 
+        # ADD THIS for verification:
+        print(f"🎮 Agent Device: {self.device}")
+        if self.device.type == 'cuda':
+            print(f"   GPU: {torch.cuda.get_device_name(0)}")
+            print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        else:
+            print("   ⚠️  WARNING: Using CPU! Training will be slow!")
+
     def select_actions(self, observations: Dict[int, np.ndarray], 
                     explore: bool = True) -> Dict[int, np.ndarray]:
         actions = {}

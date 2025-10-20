@@ -1,15 +1,9 @@
 # train.py
-import random
 import numpy as np
-import torch
-import matplotlib.pyplot as plt
 from environment import NetworkSlicingEnv
 from agents import BCWeightScheduler, MADRLAgent
 from visualizer import Network3DVisualizer
-import json
 import os
-from datetime import datetime
-import pandas as pd
 from tqdm import tqdm
 import re
 from utils import Configuration
@@ -100,6 +94,12 @@ class TrainingManager:
             obs_dim=obs_dim,
             action_dim=action_dim,
         )
+
+        # ADD THIS RIGHT AFTER:
+        print(f"✅ Agent initialized on: {self.MADRLagent.device}")
+        if self.MADRLagent.device.type == 'cpu':
+            print("   ⚠️  WARNING: Training on CPU will be VERY SLOW!")
+            print("   Enable GPU in Kaggle: Settings → Accelerator → GPU T4 x2")
 
         # BC weight scheduler
         self.bc_scheduler = BCWeightScheduler(
