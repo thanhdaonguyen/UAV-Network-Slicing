@@ -1,0 +1,46 @@
+# Model files
+saved_models/
+saved_models_p1/
+*.pth
+*.pkl
+*.h5
+
+# Data files
+data/
+datasets/
+
+# Logs and outputs
+logs/
+outputs/
+baseline_results/
+baseline_results_p1/
+
+*.log
+
+# Training artifacts
+training_progress/
+checkpoints/
+baseline_results/
+
+*.png
+*.jpg
+*.jpeg
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

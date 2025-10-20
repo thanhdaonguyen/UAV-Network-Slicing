@@ -1,0 +1,42 @@
+# TRAINING CONFIGURATION FOR MULTI-AGENT REINFORCEMENT LEARNING
+# -------------------------------------------------------------
+
+# Step-based training configuration
+total_training_steps: 700000    # Total training steps instead of episodes
+greedy_experience_gathering_steps: 1000  # Use greedy policy for experience gathering
+
+# BC Regularization
+bc_regularization:
+  initial_weight: 1      # Start: 50% BC, 50% RL
+  final_weight: 0       # End: 20% BC, 80% RL
+  transition_steps: 0 # 
+  schedule_type: 'cosine'  # 'linear', 'cosine', or 'exponential'
+
+
+# Step-based logging and checkpointing
+log_interval: 1000              # Steps between logging
+save_interval: 10000            # Steps between model saves
+evaluation_interval: 10000       # Steps between evaluations
+plot_interval: 10000             # Steps between plotting
+exploration_noise_update_interval: 2000   # Steps between exploration noise updates
+
+# Add training frequency parameters
+train_frequency: 10  # Train every 10 steps
+train_iterations: 10  # How many gradient updates when we train
+min_buffer_size: 1000  # Minimum experiences before training starts
+
+
+# Directories
+save_dir: "saved_models"
+log_dir: "logs"
+tensorboard_dir: "runs"
+
+
+# Hardware and performance
+hardware:
+  device: "auto"
+  seed: 42
+
+# RL settings
+rl_training:
+  q_value_normalization_scale: 200.0  # Divide RL loss by this

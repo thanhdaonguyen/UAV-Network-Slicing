@@ -1,0 +1,42 @@
+# CONFIGURATION FOR MULTI-AGENT REINFORCEMENT LEARNING
+
+# Agent architecture type
+agent_type: "maddpg"              # "maddpg", "mappo", "maa2c", "coma"
+
+# Observation-action space configuration of Actor Agents
+observation_dim: 94
+action: 31
+
+# MADDPG specific parameters
+maddpg:
+  # Actor network
+  actor_lr: 1e-4
+
+  
+  # Critic network
+  critic_lr: 1e-3  
+
+  
+  # Target networks
+  target_update_freq: 1           # Update target networks every N steps
+  soft_update_tau: 0.005          # Soft update coefficient
+  
+  # Training parameters
+  warmup_steps: 1000              # Steps before training starts
+  train_freq: 1                   # Training frequency (steps)
+  batch_size: 256
+  gamma: 0.99                     # Discount factor
+  buffer_size: 300000             # Replay buffer size
+  tau: 0.01                       # Soft update coefficient
+
+
+# Exploration strategies per agent
+exploration:
+  # Noise type
+  noise_type: "gaussian"          # "gaussian", "ou", "parameter"
+  
+  # Gaussian noise
+  gaussian_init: 1
+  gaussian_decay: 0.981
+  gaussian_min: 0.005
+  
