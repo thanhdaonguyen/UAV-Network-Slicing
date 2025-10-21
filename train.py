@@ -720,7 +720,7 @@ def main():
     env_config_file = "config/environment/default.yaml"  # or 'config.json' if you have one
     train_config_file = 'config/train/default.yaml'
     checkpoint_file = None
-    # checkpoint_file = "saved_models/model130/checkpoints/checkpoint_step_190000.pth"  # or specify a checkpoint path if resuming training
+    checkpoint_file = "saved_models/model26/checkpoints/checkpoint_step_110000.pth"  # or specify a checkpoint path if resuming training
     # Run profiling if specified
     if args.profile:
         # Run profiling instead of training

@@ -1,107 +1,14 @@
 
 import numpy as np
-from scipy.stats import poisson
-from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional
-import matplotlib.pyplot as plt
-from sklearn.cluster import KMeans
-from utils import Configuration
+from utils import Configuration, QueueingModel, Packet
+from dataclasses import dataclass
 from numba import jit, prange
-from collections import deque
 
-@dataclass
-class Packet:
-    """Individual packet in queue"""
-    ue_id: int
-    size: int  # bytes
-    enqueue_time: float  # seconds
-    slice_type: str
-    deadline: Optional[float] = None  # For URLLC
 
-class QueueingModel:
-    """
-    Per-DA queuing with M/M/1 approximation
-    Makes bandwidth allocation strategic!
-    """
-    def __init__(self, buffer_size=100):
-        self.buffer_size = buffer_size
-        self.queues = {}  # {da_id: deque of Packets}
-        self.dropped_packets = {}  # Track drops per DA
-        self.serviced_packets = {}  # Track successful transmissions
-        
-    def enqueue_packet(self, da_id: int, packet: Packet) -> bool:
-        """
-        Try to enqueue packet
-        Returns: True if enqueued, False if dropped (buffer overflow)
-        """
-        if da_id not in self.queues:
-            self.queues[da_id] = deque(maxlen=self.buffer_size)
-            self.dropped_packets[da_id] = 0
-            self.serviced_packets[da_id] = 0
-        
-        if len(self.queues[da_id]) >= self.buffer_size:
-            # Buffer overflow - packet dropped
-            self.dropped_packets[da_id] += 1
-            return False
-        
-        self.queues[da_id].append(packet)
-        return True
-    
-    def service_packets(self, da_id: int, service_rate: float, 
-                    timestep: float, current_time: float) -> List[Tuple[Packet, float]]:
-        """
-        Service packets from queue
-        
-        Args:
-            da_id: Demand area ID
-            service_rate: packets/second (from allocated bandwidth + SINR)
-            timestep: seconds (T_L)
-            current_time: current simulation time
-        
-        Returns:
-            List of (packet, queuing_delay_ms) tuples
-        """
-        if da_id not in self.queues:
-            return []
-        
-        # Number of packets we can serve
-        num_serviced = int(service_rate * timestep)
-        
-        serviced = []
-        for _ in range(min(num_serviced, len(self.queues[da_id]))):
-            packet = self.queues[da_id].popleft()
-            queuing_delay_ms = (current_time - packet.enqueue_time) * 1000
-            serviced.append((packet, queuing_delay_ms))
-            self.serviced_packets[da_id] += 1
-        
-        return serviced
-    
-    def get_queue_stats(self, da_id: int, current_time: float) -> Dict:
-        """Get queue statistics for observation/reward"""
-        if da_id not in self.queues or not self.queues[da_id]:
-            return {
-                'length': 0,
-                'utilization': 0.0,
-                'avg_delay_ms': 0.0,
-                'max_delay_ms': 0.0,
-                'drop_rate': 0.0
-            }
-        
-        queue = self.queues[da_id]
-        delays_ms = [(current_time - p.enqueue_time) * 1000 for p in queue]
-        
-        total_packets = self.serviced_packets[da_id] + self.dropped_packets[da_id]
-        drop_rate = self.dropped_packets[da_id] / max(total_packets, 1)
-        
-        return {
-            'length': len(queue),
-            'utilization': len(queue) / self.buffer_size,
-            'avg_delay_ms': np.mean(delays_ms) if delays_ms else 0.0,
-            'max_delay_ms': np.max(delays_ms) if delays_ms else 0.0,
-            'drop_rate': drop_rate
-        }
 
 class HandoverTracker:
+    '''Track handovers and calculate penalties'''
     def __init__(self):
         self.handover_delay_ms = 50.0
         self.handover_failure_rate = 0.01
@@ -159,7 +66,6 @@ class HandoverTracker:
         # This is called 30,000 times costing 135 seconds!
         # Original had O(n) iteration over all handovers
         return self._cached_handover_rate  # O(1) lookup!
-
 
 @dataclass
 class QoSProfile:
@@ -245,8 +151,6 @@ class DemandArea:
             self.center_position = np.zeros(3)
         if self.RB_ids_list is None:
             self.RB_ids_list = []
-
-
 
 @jit(nopython=True, parallel=True, fastmath=True, cache=True)  # Add cache=True!
 def calculate_sinr_batch_numba(ue_positions, rb_frequencies, uav_positions, 
@@ -362,12 +266,14 @@ class NetworkSlicingEnv:
         self.uav_beam_angle = getattr(env_config.uav_params, 'beam_angle', 60.0)
         
         # UE dynamics parameters
+
+        self.ue_id_pool = set()  # Pool of available IDs for reuse
+        self.next_ue_id = 0  # Only used when pool is empty
         self.ue_dynamics = env_config.ue_dynamics  # UE dynamics parameters
         self.ue_arrival_rate = self.ue_dynamics.arrival_rate  # New UEs per second
         self.ue_departure_rate = self.ue_dynamics.departure_rate  # Probability of UE leaving per minute
         self.ue_max_initial_velocity = self.ue_dynamics.max_initial_velocity  # m/s
         self.max_ues = int(self.num_ues * self.ue_dynamics.max_ues_multiplier)  # Maximum UEs allowed
-        self.next_ue_id = self.num_ues  # For generating new UE IDs
         self.change_direction_prob = self.ue_dynamics.change_direction_prob  # Probability of changing direction
 
         self.hotspots = []
@@ -439,8 +345,6 @@ class NetworkSlicingEnv:
                 beam_angle=self.uav_beam_angle,  # NEW
                 beam_direction=np.array([0.0, 0.0, -1.0])  # NEW: Default pointing down
             )
-
-            
         
         # Initialize UEs with random positions and slice types
         self.ues = {}
@@ -562,8 +466,12 @@ class NetworkSlicingEnv:
         # NEW: Update hotspot lifecycles first
         self._update_hotspots()
 
+        # ============================================
         # 1. Update existing UE positions
-        for ue in list(self.ues.values()):
+        # ============================================
+        departed_ue_ids = []  # Track IDs to recycle
+        
+        for ue_id, ue in list(self.ues.items()):
             if not ue.is_active:
                 continue
             
@@ -578,10 +486,10 @@ class NetworkSlicingEnv:
                     self.hotspot_attraction_strength * hotspot_pull * current_speed
                 )
             
-            # Update position based on velocity (SAME AS BEFORE)
+            # Update position based on velocity
             new_position = ue.position + ue.velocity * self.T_L
             
-            # Boundary handling - bounce off walls (SAME AS BEFORE)
+            # Boundary handling - bounce off walls
             for dim in range(2):  # Only x and y
                 if new_position[dim] < 0 or new_position[dim] > self.service_area[dim]:
                     ue.velocity[dim] = -ue.velocity[dim]
@@ -589,7 +497,7 @@ class NetworkSlicingEnv:
             
             ue.position = new_position
             
-            # Randomly change direction occasionally (SAME AS BEFORE)
+            # Randomly change direction occasionally
             if np.random.random() < self.change_direction_prob:
                 speed = np.linalg.norm(ue.velocity[:2])
                 if speed > 0:
@@ -597,12 +505,27 @@ class NetworkSlicingEnv:
                     ue.velocity[0] = speed * np.cos(new_direction)
                     ue.velocity[1] = speed * np.sin(new_direction)
             
-            # Check if UE should leave (SAME AS BEFORE)
+            # Check if UE should leave
             if np.random.random() < self.ue_departure_rate:
                 ue.is_active = False
                 self.stats['departures'] += 1
+                departed_ue_ids.append(ue_id)  # Mark for ID recycling
         
-        # 2. Handle new UE arrivals (SAME AS BEFORE)
+        # ============================================
+        # 2. Clean up inactive UEs and recycle IDs
+        # ============================================
+        inactive_ues = [ue_id for ue_id, ue in self.ues.items() if not ue.is_active]
+        
+        for ue_id in inactive_ues:
+            # Add ID to reuse pool
+            self.ue_id_pool.add(ue_id)
+            
+            # Delete UE object
+            del self.ues[ue_id]
+        
+        # ============================================
+        # 3. Handle new UE arrivals with ID reuse
+        # ============================================
         active_ue_count = len([ue for ue in self.ues.values() if ue.is_active])
         expected_arrivals = self.ue_arrival_rate * self.T_L
         num_arrivals = min(
@@ -613,16 +536,24 @@ class NetworkSlicingEnv:
         for _ in range(num_arrivals):
             self._add_new_ue()
             self.stats['arrivals'] += 1
-        
-        # 3. Clean up inactive UEs periodically (SAME AS BEFORE)
-        if len(self.ues) > self.max_ues:
-            inactive_ues = [ue_id for ue_id, ue in self.ues.items() if not ue.is_active]
-            for ue_id in inactive_ues[:len(inactive_ues)//2]:
-                del self.ues[ue_id]
 
     def _add_new_ue(self):
-        """Add a new UE to the network - spawn near active hotspots"""
+        """Add a new UE to the network - spawn near active hotspots WITH ID REUSE"""
         
+        # ============================================
+        # Get UE ID (reuse from pool if available)
+        # ============================================
+        if self.ue_id_pool:
+            # Reuse an ID from the pool
+            new_ue_id = self.ue_id_pool.pop()
+        else:
+            # Generate new ID
+            new_ue_id = self.next_ue_id
+            self.next_ue_id += 1
+        
+        # ============================================
+        # Position selection (existing logic)
+        # ============================================
         # Find active hotspots (strength > 0.5)
         active_hotspots = [h for h in self.hotspots if h['current_strength'] > 0.5]
         
@@ -648,7 +579,9 @@ class NetworkSlicingEnv:
             x = np.random.uniform(0, self.service_area[0])
             y = np.random.uniform(0, self.service_area[1])
         
-        # Rest of your original code...
+        # ============================================
+        # Velocity and slice type (existing logic)
+        # ============================================
         speed = np.random.uniform(0, self.ue_max_initial_velocity)
         direction = np.random.uniform(0, 2 * np.pi)
         velocity_x = speed * np.cos(direction)
@@ -659,16 +592,18 @@ class NetworkSlicingEnv:
             p=[self.slice_probs["embb"], self.slice_probs["urllc"], self.slice_probs["mmtc"]]
         )
         
+        # ============================================
+        # Create UE with reused/new ID
+        # ============================================
         new_ue = UE(
-            id=self.next_ue_id,
+            id=new_ue_id,  # Reused or new ID
             position=np.array([x, y, 0.0]),
             slice_type=slice_type,
             velocity=np.array([velocity_x, velocity_y, 0.0]),
             is_active=True
         )
         
-        self.ues[self.next_ue_id] = new_ue
-        self.next_ue_id += 1
+        self.ues[new_ue_id] = new_ue
 
     def _create_RBs(self) -> List[ResourceBlock]:
         """Create Resource Blocks for a UAV"""
@@ -1330,35 +1265,6 @@ class NetworkSlicingEnv:
             avg_ho_penalty = np.mean(ho_penalties) if ho_penalties else 0.0  # Fix: handle empty list
             obs.append(avg_ho_penalty / 50.0)  # Normalize by 50ms
 
-            # ============================================
-            # 4. Load Prediction Features (5 dims). So far 5 + 90 + 4 + 5 = 104
-            # ============================================
-            
-            # UE arrival trend (arrivals in last timestep)
-            # obs.append(self.stats['arrivals'] / 10.0)  # Normalize
-            
-            # # UE departure trend
-            # obs.append(self.stats['departures'] / 10.0)
-            
-            # # Hotspot proximity (distance to nearest active hotspot)
-            # if self.hotspots:
-            #     distances = [np.linalg.norm(uav.position[:2] - h['position']) 
-            #                 for h in self.hotspots if h['current_strength'] > 0.3]
-            #     min_dist = min(distances) if distances else 2000.0
-            #     obs.append(min_dist / 2000.0)  # Normalize by service area
-                
-            #     # Hotspot strength
-            #     strongest = max([h['current_strength'] for h in self.hotspots], default=0.0)
-            #     obs.append(strongest)
-                
-            #     # Hotspot state (growing/active/fading)
-            #     nearest_hotspot = min(self.hotspots, 
-            #                         key=lambda h: np.linalg.norm(uav.position[:2] - h['position']))
-            #     state_encoding = {'growing': 0.33, 'active': 0.66, 'fading': 1.0}
-            #     obs.append(state_encoding.get(nearest_hotspot['state'], 0.0))
-            # else:
-            #     obs.extend([1.0, 0.0, 0.0])  # No hotspots
-            
 
             # ============================================================
             # 3. Surrounding Condition (8 dims). So far 5 + 63 + 4 + 8 = 80
@@ -2049,84 +1955,6 @@ class NetworkSlicingEnv:
             hit_rate = self.cache_hits / total_accesses * 100
             print(f"SINR Cache Stats: Hits={self.cache_hits}, Misses={self.cache_misses}, Hit Rate={hit_rate:.1f}%")
             print(f"Cache Size: {len(self.sinr_cache)} entries")
-
-    def print_individual_ue_details(self):
-        """Print detailed table of each UE's performance"""
-        ue_info = self.get_UEs_throughput_demand_and_satisfaction()
-        
-        if not ue_info:
-            print("No active UEs to display")
-            return
-        
-        print("\n" + "="*120)
-        print("INDIVIDUAL UE PERFORMANCE DETAILS")
-        print("="*120)
-        
-        # Table header
-        header = f"{'UE ID':<6} {'Slice':<6} {'DA': <6} {'Position (x,y)':<15} {'UAV':<4} {'RBs':<4} {'Throughput':<12} {'Demand':<12} {'Satisfaction':<12} {'Status':<12}"
-        print(header)
-        print("-" * 120)
-        
-        # Sort UEs by satisfaction (worst first)
-        sorted_ues = sorted(ue_info.items(), key=lambda x: x[1][2])
-        
-        for ue_id, (throughput, demand, satisfaction) in sorted_ues:
-            ue = self.ues[ue_id]
-            
-            # Status determination
-            if satisfaction >= 0.9:
-                status = "✓ Excellent"
-            elif satisfaction >= 0.7:
-                status = "○ Good"
-            elif satisfaction >= 0.5:
-                status = "△ Fair"
-            else:
-                status = "✗ Poor"
-            
-            # Format values
-            pos_str = f"({ue.position[0]:.0f},{ue.position[1]:.0f})"
-            throughput_str = f"{throughput/1e6:.2f} Mbps"
-            demand_str = f"{demand/1e6:.2f} Mbps"
-            satisfaction_str = f"{satisfaction:.3f} ({satisfaction*100:.1f}%)"
-            
-            row = f"{ue_id:<6} {ue.slice_type.upper():<6} {ue.assigned_da:<6} {pos_str:<15} {ue.assigned_uav:<4} {len(ue.assigned_rb):<4} {throughput_str:<12} {demand_str:<12} {satisfaction_str:<12} {status:<12}"
-            print(row)
-        
-        # Summary statistics
-        satisfactions = [info[2] for info in ue_info.values()]
-        # satisfactions = [1 for info in ue_info.values()]
-        print("-" * 120)
-        print(f"SUMMARY: {len(ue_info)} UEs | Avg Satisfaction: {np.mean(satisfactions):.3f} | "
-            f"Satisfied (>90%): {sum(1 for s in satisfactions if s > 0.9)} | "
-            f"Unsatisfied (<50%): {sum(1 for s in satisfactions if s < 0.5)}")
-        print("="*120)
-
-    def print_da_details(self):
-        """Print detailed table of each Demand Area's performance"""
-        if not self.demand_areas:
-            print("No Demand Areas to display")
-            return
-        
-        print("\n" + "="*100)
-        print("DEMAND AREA PERFORMANCE DETAILS")
-        print("="*100)
-        
-        # Table header
-        header = f"{'DA ID':<6} {'UAV':<4} {'Slice':<6} {'SINR Level':<10} {'# UEs':<6} {'Allocated BW (MHz)':<18} {'RBs':<4} {'Raw Allocated Action':<20}"
-        print(header)
-        print("-" * 100)
-        
-        for da in self.demand_areas.values():
-            allocated_bw_mhz = da.allocated_bandwidth  # Convert to MHz
-            raw_allocated_action = da.raw_allocated_action
-            row = f"{da.id:<6} {da.uav_id:<4} {da.slice_type.upper():<6} {da.distance_level:<10} {len(da.user_ids):<6} {allocated_bw_mhz:<18.2f} {len(da.RB_ids_list):<4} {raw_allocated_action:<20.3f}"
-            print(row)
-        
-        print("-" * 100)
-        total_ues = sum(len(da.user_ids) for da in self.demand_areas.values())
-        total_allocated_bw = sum(da.allocated_bandwidth for da in self.demand_areas.values()) / 1e6  # MHz
-        print(f"SUMMARY: {len(self.demand_areas)} DAs | Total UEs: {total_ues} | Total Allocated BW: {total_allocated_bw:.2f} MHz")
-        print("="*100)
 
     def get_da_details(self):
         """Return detailed table lines of each Demand Area's performance"""

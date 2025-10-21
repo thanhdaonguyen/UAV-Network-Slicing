@@ -1,7 +1,8 @@
 # utils.py
 import yaml
 from typing import Any, Dict
-import torch
+from dataclasses import dataclass
+from typing import List, Dict, Tuple, Optional
 import numpy as np
 from OpenGL.GL import *
 from OpenGL.GLU import *
@@ -431,25 +432,99 @@ class Configuration:
         attrs = {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
         return f"Configuration({attrs})"
 
+@dataclass
+class Packet:
+    """Individual packet in queue"""
+    ue_id: int
+    size: int  # bytes
+    enqueue_time: float  # seconds
+    slice_type: str
+    deadline: Optional[float] = None  # For URLLC
 
-if __name__ == "__main__":
-    # Example usage
-    config = Configuration('config/environment/default.yaml')
 
+from collections import deque
+class QueueingModel:
+    """
+    Per-DA queuing with M/M/1 approximation
+    Makes bandwidth allocation strategic!
+    """
+    def __init__(self, buffer_size=100):
+        self.buffer_size = buffer_size
+        self.queues = {}  # {da_id: deque of Packets}
+        self.dropped_packets = {}  # Track drops per DA
+        self.serviced_packets = {}  # Track successful transmissions
+        
+    def enqueue_packet(self, da_id: int, packet: Packet) -> bool:
+        """
+        Try to enqueue packet
+        Returns: True if enqueued, False if dropped (buffer overflow)
+        """
+        if da_id not in self.queues:
+            self.queues[da_id] = deque(maxlen=self.buffer_size)
+            self.dropped_packets[da_id] = 0
+            self.serviced_packets[da_id] = 0
+        
+        if len(self.queues[da_id]) >= self.buffer_size:
+            # Buffer overflow - packet dropped
+            self.dropped_packets[da_id] += 1
+            return False
+        
+        self.queues[da_id].append(packet)
+        return True
     
-    # Access nested attributes
-    num_uavs = config.slicing.slice_weights
-    print(num_uavs)
+    def service_packets(self, da_id: int, service_rate: float, 
+                    timestep: float, current_time: float) -> List[Tuple[Packet, float]]:
+        """
+        Service packets from queue
+        
+        Args:
+            da_id: Demand area ID
+            service_rate: packets/second (from allocated bandwidth + SINR)
+            timestep: seconds (T_L)
+            current_time: current simulation time
+        
+        Returns:
+            List of (packet, queuing_delay_ms) tuples
+        """
+        if da_id not in self.queues:
+            return []
+        
+        # Number of packets we can serve
+        num_serviced = int(service_rate * timestep)
+        
+        serviced = []
+        for _ in range(min(num_serviced, len(self.queues[da_id]))):
+            packet = self.queues[da_id].popleft()
+            queuing_delay_ms = (current_time - packet.enqueue_time) * 1000
+            serviced.append((packet, queuing_delay_ms))
+            self.serviced_packets[da_id] += 1
+        
+        return serviced
     
-    # Pretty print the config
-    # print(config)
+    def get_queue_stats(self, da_id: int, current_time: float) -> Dict:
+        """Get queue statistics for observation/reward"""
+        if da_id not in self.queues or not self.queues[da_id]:
+            return {
+                'length': 0,
+                'utilization': 0.0,
+                'avg_delay_ms': 0.0,
+                'max_delay_ms': 0.0,
+                'drop_rate': 0.0
+            }
+        
+        queue = self.queues[da_id]
+        delays_ms = [(current_time - p.enqueue_time) * 1000 for p in queue]
+        
+        total_packets = self.serviced_packets[da_id] + self.dropped_packets[da_id]
+        drop_rate = self.dropped_packets[da_id] / max(total_packets, 1)
+        
+        return {
+            'length': len(queue),
+            'utilization': len(queue) / self.buffer_size,
+            'avg_delay_ms': np.mean(delays_ms) if delays_ms else 0.0,
+            'max_delay_ms': np.max(delays_ms) if delays_ms else 0.0,
+            'drop_rate': drop_rate
+        }
     
-    # Convert to dict
-    # config_dict = config.__dict__
-    # print("Config as dict:", config_dict)
-    
-    # Check if a key exists
-    if hasattr(config, 'system'):
-        print("UAVs configured")
 
-    print(torch.backends.mps.is_available())  # should print True
+

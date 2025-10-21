@@ -1638,7 +1638,7 @@ def main():
     parser = argparse.ArgumentParser(description='Compare baseline agents')
     parser.add_argument('--env_config', type=str, default='config/environment/default.yaml',
                        help='Path to environment config')
-    parser.add_argument('--checkpoint', type=str, default='saved_models/model21/checkpoints/checkpoint_step_110000.pth',
+    parser.add_argument('--checkpoint', type=str, default='saved_models/model26/checkpoints/checkpoint_step_100000.pth',
                        help='Path to trained MADRL model checkpoint')
     parser.add_argument('--steps', type=int, default=2000,
                        help='Number of steps for evaluation')
