@@ -1668,10 +1668,6 @@ class NetworkSlicingEnv:
             delta * urllc_penalty
         )
 
-        performance_stats = {
-            'qos_reward': qos_reward,
-        }
-        
         return total_reward, qos_reward, energy_penalty, fairness_reward
 
     def _calculate_qos_reward(self) -> Tuple[float, Dict]:
