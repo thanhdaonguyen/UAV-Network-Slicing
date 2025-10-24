@@ -527,4 +527,220 @@ class QueueingModel:
         }
     
 
+    def _service_downlink_packets(self):
+        """
+        Service downlink packets: UAV transmits to UEs
+        - UAV serves packets from its downlink queue
+        - Transmission rate depends on SINR and allocated bandwidth
+        - Packets successfully delivered to UEs
+        """
+        
+        for da in self.demand_areas.values():
+            if not da.user_ids:
+                continue
+            
+            uav = self.uavs[da.uav_id]
+            
+            # ============================================
+            # Calculate DOWNLINK transmission rate
+            # ============================================
+            # Total allocated bandwidth for this DA
+            allocated_bw = len(da.RB_ids_list) * self.rb_bandwidth  # Hz
+            
+            # Average SINR for UEs in this DA (downlink: UAV → UE)
+            avg_sinr = self._get_avg_da_sinr(da, uav)
+            sinr_linear = 10 ** (avg_sinr / 10)
+            
+            # Shannon capacity (downlink)
+            total_data_rate_bps = allocated_bw * np.log2(1 + sinr_linear)
+            
+            # Service rate (packets/second that UAV can transmit)
+            avg_packet_size = 1500 if da.slice_type == 'embb' else 100
+            service_rate = total_data_rate_bps / (avg_packet_size * 8)
+            
+            # ============================================
+            # Transmit packets from UAV to UEs
+            # ============================================
+            serviced = self.queuing_model.service_packets(
+                da.id, 
+                service_rate, 
+                self.T_L, 
+                self.current_time
+            )
+            
+            # ============================================
+            # Track delivery statistics
+            # ============================================
+            for packet, queuing_delay_ms in serviced:
+                dest_ue_id = packet.ue_id  # DESTINATION UE
+                
+                if dest_ue_id not in self.ues:
+                    continue
+                
+                # Track downlink queuing delays
+                if not hasattr(self, 'downlink_queuing_delays'):
+                    self.downlink_queuing_delays = {}
+                
+                if dest_ue_id not in self.downlink_queuing_delays:
+                    self.downlink_queuing_delays[dest_ue_id] = []
+                
+                self.downlink_queuing_delays[dest_ue_id].append(queuing_delay_ms)
+                
+                # Keep recent history
+                if len(self.downlink_queuing_delays[dest_ue_id]) > 100:
+                    self.downlink_queuing_delays[dest_ue_id].pop(0)
 
+
+import time
+import psutil
+import os
+from collections import defaultdict
+import numpy as np
+from typing import Dict, List, Tuple
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+class PerformanceProfiler:
+    """Lightweight performance profiler"""
+    
+    def __init__(self, enabled=False):
+        self.enabled = enabled
+        if not enabled:
+            return
+            
+        self.process = psutil.Process(os.getpid())
+        self.timings = defaultdict(list)
+        self.current_timers = {}
+        self.memory_snapshots = []
+        self.step_counters = defaultdict(list)
+        self.start_time = time.time()
+        self.last_log_time = self.start_time
+        
+    def start_timer(self, name: str):
+        if self.enabled:
+            self.current_timers[name] = time.time()
+    
+    def end_timer(self, name: str):
+        if self.enabled and name in self.current_timers:
+            duration = time.time() - self.current_timers[name]
+            self.timings[name].append(duration * 1000)
+            del self.current_timers[name]
+    
+    def record_memory(self, label: str = ""):
+        if not self.enabled:
+            return 0
+        mem_mb = self.process.memory_info().rss / (1024 * 1024)
+        self.memory_snapshots.append({
+            'time': time.time() - self.start_time,
+            'memory_mb': mem_mb,
+            'label': label
+        })
+        return mem_mb
+    
+    def record_step(self, step: int, env, info: dict):
+        if not self.enabled:
+            return
+            
+        self.step_counters['active_ues'].append(len([ue for ue in env.ues.values() if ue.is_active]))
+        self.step_counters['qos'].append(info.get('qos_satisfaction', 0))
+        self.step_counters['energy'].append(info.get('energy_efficiency', 0))
+        self.step_counters['fairness'].append(info.get('fairness_level', 0))
+        
+        if hasattr(env, 'cache_hits'):
+            total = env.cache_hits + env.cache_misses
+            self.step_counters['cache_hit_rate'].append(env.cache_hits / total if total > 0 else 0)
+    
+    def log_summary(self, step: int, interval: int = 100):
+        if not self.enabled or step % interval != 0:
+            return
+            
+        elapsed = time.time() - self.last_log_time
+        print(f"\n{'='*80}")
+        print(f"PROFILING - Step {step} ({elapsed:.1f}s)")
+        print(f"{'='*80}")
+        
+        if self.memory_snapshots:
+            recent = [s['memory_mb'] for s in self.memory_snapshots[-interval:]]
+            print(f"📊 MEMORY: Current={recent[-1]:.1f}MB  Peak={max(recent):.1f}MB  Growth={recent[-1]-recent[0]:+.1f}MB")
+        
+        if self.timings:
+            print(f"⏱️  TIMING:")
+            for name, times in sorted(self.timings.items(), key=lambda x: sum(x[1]), reverse=True)[:5]:
+                recent = times[-interval:]
+                print(f"  {name:25s}: avg={np.mean(recent):5.1f}ms  total={sum(recent)/1000:5.1f}s")
+        
+        print(f"{'='*80}\n")
+        self.last_log_time = time.time()
+    
+    def generate_report(self, save_path: str = None):
+        if not self.enabled:
+            return
+            
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        fig.suptitle('Performance Report', fontweight='bold')
+        
+        # Memory
+        if self.memory_snapshots:
+            times = [s['time'] for s in self.memory_snapshots]
+            memory = [s['memory_mb'] for s in self.memory_snapshots]
+            axes[0,0].plot(times, memory)
+            axes[0,0].set_title('Memory Usage')
+            axes[0,0].set_xlabel('Time (s)')
+            axes[0,0].set_ylabel('Memory (MB)')
+            axes[0,0].grid(alpha=0.3)
+        
+        # Timing breakdown
+        if self.timings:
+            names = list(self.timings.keys())[:10]
+            totals = [sum(self.timings[n])/1000 for n in names]
+            axes[0,1].barh(range(len(names)), totals)
+            axes[0,1].set_yticks(range(len(names)))
+            axes[0,1].set_yticklabels([n[:20] for n in names])
+            axes[0,1].set_title('Time Breakdown')
+            axes[0,1].set_xlabel('Time (s)')
+            axes[0,1].grid(alpha=0.3)
+        
+        # QoS over time
+        if 'qos' in self.step_counters:
+            axes[1,0].plot(self.step_counters['qos'], label='QoS')
+            if 'energy' in self.step_counters:
+                axes[1,0].plot(self.step_counters['energy'], label='Energy')
+            if 'fairness' in self.step_counters:
+                axes[1,0].plot(self.step_counters['fairness'], label='Fairness')
+            axes[1,0].set_title('Metrics Over Time')
+            axes[1,0].legend()
+            axes[1,0].grid(alpha=0.3)
+        
+        # Active UEs
+        if 'active_ues' in self.step_counters:
+            axes[1,1].plot(self.step_counters['active_ues'])
+            axes[1,1].set_title('Active UEs')
+            axes[1,1].set_xlabel('Step')
+            axes[1,1].grid(alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"✓ Report saved: {save_path}")
+        
+        plt.show()
+        
+        # Text summary
+        print(f"\n{'='*80}")
+        print("FINAL SUMMARY")
+        print(f"{'='*80}")
+        total_time = time.time() - self.start_time
+        print(f"Runtime: {total_time:.1f}s ({total_time/60:.1f}min)")
+        
+        if self.memory_snapshots:
+            mem = [s['memory_mb'] for s in self.memory_snapshots]
+            print(f"Memory: Initial={mem[0]:.1f}MB  Final={mem[-1]:.1f}MB  Peak={max(mem):.1f}MB")
+        
+        if self.timings:
+            print("\nTop Time Consumers:")
+            for name, times in sorted(self.timings.items(), key=lambda x: sum(x[1]), reverse=True)[:5]:
+                print(f"  {name:30s}: {sum(times)/1000:6.1f}s")
+        
+        print(f"{'='*80}\n")

@@ -18,7 +18,7 @@ log_interval: 1000              # Steps between logging
 save_interval: 10000            # Steps between model saves
 evaluation_interval: 10000       # Steps between evaluations
 plot_interval: 10000             # Steps between plotting
-exploration_noise_update_interval: 2000   # Steps between exploration noise updates
+exploration_noise_update_interval: 3500   # Steps between exploration noise updates
 
 # Add training frequency parameters
 train_frequency: 10  # Train every 10 steps

@@ -55,6 +55,21 @@ slicing:
         urllc: 0.4
         mmtc: 0.2
 
+qos_weights:
+    embb:
+        throughput: 0.7
+        delay: 0.2
+        reliability: 0.1
+    urllc:
+        throughput: 0.1
+        delay: 0.5      # CRITICAL
+        reliability: 0.4  # CRITICAL
+    mmtc:
+        throughput: 0.2
+        delay: 0.1
+        reliability: 0.7
+
+
 # UAV constraints and capabilities
 uav_params:
     max_power: 10.0 # Watts
@@ -63,6 +78,7 @@ uav_params:
     initial_power: 5.0 # Initial power setting
     initial_battery: 800000.0 # Initial battery level
     beam_angle: 60.0 # degrees - Maximum beam angle (half-angle from vertical)
+    buffer_size: 1000000  # bits
 
 # User Equipment dynamics
 ue_dynamics:
@@ -82,6 +98,19 @@ ue_dynamics:
             speed: 0.0 # m/s
             probability: 0.2
     change_direction_prob: 0.3 # Probability of changing direction per large time-scale step
+
+# Traffic model of slices
+traffic_patterns:
+    embb:
+        packet_size: 1500
+        avg_arrival_rate: 50
+    urllc:
+        packet_size: 200
+        avg_arrival_rate: 100
+    mmtc:
+        packet_size: 200
+        avg_arrival_rate: 5
+
 
 # Distance-based classification thresholds (used for DA formation)
 da_distance_thresholds:
@@ -110,5 +139,6 @@ reward_weights:
 
 # Energy consumption models
 energy_models:
-    movement_energy_factor: 0.1 # Energy per meter of UAV's movement
+    horizontal_energy_factor: 0.1 # Energy per meter of UAV's movement
+    vertical_energy_factor: 0.15 # Energy per meter of UAV's vertical movement
     transmission_energy_factor: 1.0 # Base transmission energy multiplier

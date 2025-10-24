@@ -140,7 +140,7 @@ class TrainingManager:
             'steps': [],
             'rewards': [],
             'qos_satisfaction': [],
-            'energy_efficiency': [],
+            'energy_usage_level': [],
             'fairness_level': [],
             'active_ues': [],
             'noise': [],
@@ -198,8 +198,6 @@ class TrainingManager:
         progress_bar = tqdm(range(self.config['total_training_steps']), desc="Training Steps")
         
         for global_step in progress_bar:
-            # Collect experiences
-            # greedy_prob = max(0.0, 1.0 - global_step / 100000)
             
             # if global_step < self.config['greedy_experience_gathering_steps']:
             greedy_actions = self.GreedyAgent.select_actions(observations)
@@ -262,7 +260,8 @@ class TrainingManager:
                         'Actor Loss': f'{np.mean(actor_losses):.4f}',
                         'RL Loss': f'{np.mean(rl_losses_list):.4f}',
                         'BC Loss': f'{np.mean(bc_losses_list):.4f}',
-                        'Buffer': len(self.MADRLagent.buffer)
+                        'Buffer': f'{len(self.MADRLagent.buffer)}'
+
                     })
             
             # Store environment metrics (every step)
@@ -299,7 +298,7 @@ class TrainingManager:
         self.step_metrics['steps'].append(step)
         self.step_metrics['rewards'].append(reward)
         self.step_metrics['qos_satisfaction'].append(info['qos_satisfaction'])
-        self.step_metrics['energy_efficiency'].append(info['energy_efficiency'])
+        self.step_metrics['energy_usage_level'].append(info['energy_usage_level'])
         self.step_metrics['fairness_level'].append(info['fairness_level'])
         self.step_metrics['active_ues'].append(info['active_ues'])
         self.step_metrics['noise'].append(getattr(self.MADRLagent, 'exploration_noise', 0))
@@ -363,10 +362,10 @@ class TrainingManager:
         axes[0, 1].grid(True)
         
         # Plot 3: Energy efficiency
-        energy_efficiency = step_df['energy_efficiency'].values
-        axes[0, 2].plot(steps, energy_efficiency, 'orange', alpha=0.6)
+        energy_usage_level = step_df['energy_usage_level'].values
+        axes[0, 2].plot(steps, energy_usage_level, 'orange', alpha=0.6)
         if len(steps) > 100:
-            smoothed_energy = self._moving_average(energy_efficiency, 1000)
+            smoothed_energy = self._moving_average(energy_usage_level, 1000)
             axes[0, 2].plot(steps[-len(smoothed_energy):], smoothed_energy, 'darkorange', linewidth=2)
         axes[0, 2].set_title('Energy Consumption Rate')
         axes[0, 2].set_xlabel('Steps')
@@ -662,7 +661,8 @@ def profile_training_step():
     
     # Warm up (fill buffer)
     print("Warming up buffer...")
-    for _ in range(1000):
+    progress_bar = tqdm(range(1000), desc="Warming Up Buffer")
+    for _ in progress_bar:
         actions = agent.select_actions(obs, explore=True)
         next_obs, reward, done, info = env.step(actions)
         agent.store_transition(obs, actions, actions, reward, next_obs, done)
@@ -674,8 +674,7 @@ def profile_training_step():
     profiler.enable()
     
 
-    progress_bar = tqdm(range(10000), desc="Training Steps")
-    # Profile 100 steps
+    progress_bar = tqdm(range(2000), desc="Training Steps")
     for i in progress_bar:
         # Environment step
         actions = agent.select_actions(obs, explore=True)
@@ -700,7 +699,7 @@ def profile_training_step():
     stats = pstats.Stats(profiler, stream=s)
     stats.strip_dirs()
     stats.sort_stats(SortKey.CUMULATIVE)
-    stats.print_stats(30)
+    stats.print_stats(80)
     
     print(s.getvalue())
     
@@ -720,7 +719,7 @@ def main():
     env_config_file = "config/environment/default.yaml"  # or 'config.json' if you have one
     train_config_file = 'config/train/default.yaml'
     checkpoint_file = None
-    checkpoint_file = "saved_models/model26/checkpoints/checkpoint_step_110000.pth"  # or specify a checkpoint path if resuming training
+    # checkpoint_file = "saved_models/model29/checkpoints/checkpoint_step_390000.pth"  # or specify a checkpoint path if resuming training
     # Run profiling if specified
     if args.profile:
         # Run profiling instead of training

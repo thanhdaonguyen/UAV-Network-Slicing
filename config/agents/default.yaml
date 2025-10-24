@@ -40,3 +40,7 @@ exploration:
   gaussian_decay: 0.981
   gaussian_min: 0.005
   
+packet_generation:
+  max_packets_per_step: 10000  # Prevent explosion
+  use_uniform_arrivals: true   # Faster than exponential
+  buffer_aware: true           # Check buffer before generating

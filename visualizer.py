@@ -129,13 +129,19 @@ class Network3DVisualizer:
     """3D Visualizer for UAV Network Slicing with enhanced controls"""
     
     def __init__(self, env: NetworkSlicingEnv, agent: Optional[MADRLAgent] = None,
-                 window_width: int = 1600, window_height: int = 900):
+                 window_width: int = 1600, window_height: int = 900, enable_profiling: bool = False, log_interval: int = 100):
         pygame.init()
         
         self.env = env
         self.agent = agent
         self.window_width = window_width
         self.window_height = window_height
+
+
+        # Performance profiler
+        self.profiler = PerformanceProfiler(enabled=enable_profiling)
+        self.log_interval = log_interval
+        self.step_count = 0
         
         # OpenGL setup
         self.display = pygame.display.set_mode((window_width, window_height), DOUBLEBUF | OPENGL)
@@ -210,6 +216,9 @@ class Network3DVisualizer:
         
         # Initialize
         self.reset_simulation()
+
+        # Record initial memory
+        self.profiler.record_memory('init_complete')
     
     def init_control_sliders(self):
         """Initialize control sliders for UAV adjustment"""
@@ -267,10 +276,7 @@ class Network3DVisualizer:
             self.sliders['power'].value = uav.current_power
             self.sliders['battery'].value = uav.current_battery
             self.sliders['beam_angle'].value = uav.beam_angle  # NEW
-            
-            # Update bandwidth sliders from demand areas
-            # for da in self.env.demand_areas.values():
-            #     print("DA:", da.id, da.uav_id, da.allocated_bandwidth)
+        
             uav_das = sorted([da for da in self.env.demand_areas.values() if da.uav_id == self.selected_uav],
                            key=lambda da: da.id)
             
@@ -281,6 +287,8 @@ class Network3DVisualizer:
     
     def apply_sliders_to_uav(self):
         """Apply slider values to selected UAV and normalize bandwidth"""
+
+
         if self.selected_uav is not None and self.selected_uav in self.env.uavs:
             uav = self.env.uavs[self.selected_uav]
             
@@ -318,10 +326,13 @@ class Network3DVisualizer:
                     da.allocated_bandwidth = bw_values[idx]
             
             # Re-allocate resource blocks based on new bandwidth
-            self.env._allocate_rbs_fairly(uav, uav_das)
-
+            self.env._allocate_rbs_fairly()
         
-    
+        reward, qos_reward, energy_penalty, fairness_reward = self.env.calculate_global_reward()
+        self.current_metrics['qos'] = qos_reward
+        self.current_metrics['energy'] = energy_penalty
+        self.current_metrics['fairness'] = fairness_reward
+
     def normalize_bandwidth_sliders(self):
         """Normalize bandwidth sliders to sum to max bandwidth"""
         if self.selected_uav is not None and self.selected_uav in self.env.uavs:
@@ -553,7 +564,6 @@ class Network3DVisualizer:
         glDepthMask(GL_TRUE)
         
         glEnable(GL_LIGHTING)
-
     
     def draw_uav_enhanced(self, uav):
         """
@@ -744,6 +754,9 @@ class Network3DVisualizer:
     
     def draw_3d_scene(self):
         """Draw the 3D scene with proper depth ordering"""
+
+        self.profiler.start_timer('draw_3d_scene')
+
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         
         self.camera.apply()
@@ -763,8 +776,8 @@ class Network3DVisualizer:
             self.draw_uav_path(uav_id)
         
         # 4. Demand areas
-        for da in self.env.demand_areas.values():
-            self.draw_demand_area(da)
+        # for da in self.env.demand_areas.values():
+        #     self.draw_demand_area(da)
         
         # 5. Connections (semi-transparent lines)
         if self.show_connections:
@@ -776,6 +789,8 @@ class Network3DVisualizer:
         # 7. UAVs (drawn last so they're always on top)
         for uav in self.env.uavs.values():
             self.draw_uav_enhanced(uav)
+
+        self.profiler.end_timer('draw_3d_scene')
 
     def draw_all_connections(self):
         """Draw all UE-UAV connections separately for better control"""
@@ -817,47 +832,44 @@ class Network3DVisualizer:
         
         # Main info panel
         info_lines = [
-            f"UAV Network 3D Visualizer {'[PAUSED]' if self.paused else ''}",
-            f"Time: {self.env.current_time:.1f}s",
+            f"Overall Statistics: {'[PAUSED]' if self.paused else ''}",
+            f"Time: {self.env.current_time:.1f}s | Step: {(self.env.current_time / self.env.T_L):.0f}",
+            f"QoS             : {self.current_metrics['qos']:.2f}",
+            f"Energy Penalty  : {(1-self.current_metrics['energy']):.2f}",
+            f"Fairness        : {self.current_metrics['fairness']:.2f}",
             f"UAVs: {len(self.env.uavs)} | UEs: {sum(1 for ue in self.env.ues.values() if ue.is_active)}",
-            f"QoS: {self.current_metrics['qos']:.2%} | Energy: {(1-self.current_metrics['energy']):.2%}",
-            f"Uncovered UEs: {self.env.stats.get('uncovered_ues', 0)}",
+            f"Uncovered UEs   : {self.env.stats.get('uncovered_ues', 0)} | Covered UEs: {self.env.stats.get('covered_ues', 0)}",
             "",
             "Controls:",
             "P: Pause | Space: Step | R: Reset",
             "Left Click: Select UE | Tab: Cycle UAV",
             "U: UAV Panel | N: Normalize BW | Enter: Apply",
-            "C/D/G/B: Toggle Views | Mouse: Rotate/Pan/Zoom",
+            "C/D/B: Toggle Views | Mouse: Rotate/Pan/Zoom",
             "ESC: Exit"
         ]
-        
-        # Add UAV info to main panel if UAV is selected
-        if self.selected_uav is not None and self.selected_uav in self.env.uavs:
-            uav = self.env.uavs[self.selected_uav]
+
+         # Add profiling info if enabled
+        if self.profiler.enabled:
+            recent_mem = [s['memory_mb'] for s in self.profiler.memory_snapshots[-10:]] if self.profiler.memory_snapshots else [0]
             info_lines.extend([
                 "",
-                f"Selected UAV {self.selected_uav}:",
-                f"Position: ({uav.position[0]:.0f}, {uav.position[1]:.0f}, {uav.position[2]:.0f})",
-                f"Power: {uav.current_power:.2f}W / {uav.max_power:.2f}W",
-                f"Battery: {uav.current_battery:.0f} / {uav.battery_capacity:.0f} J",
-                f"Energy Used: {uav.energy_used:.2f} J",
-                f"Resource Blocks: {len([rb for rb in uav.RBs if rb.allocated_ue_id != -1])} / {len(uav.RBs)} allocated"
+                f"🔍 Memory: {recent_mem[-1]:.1f} MB",
             ])
         
         # Draw main info background
         glColor4f(0.1, 0.1, 0.15, 0.8)
         glBegin(GL_QUADS)
         glVertex2f(10, 10)
-        glVertex2f(400, 10)
-        glVertex2f(400, 30 + len(info_lines) * 25)
-        glVertex2f(10, 30 + len(info_lines) * 25)
+        glVertex2f(350, 10)
+        glVertex2f(350, len(info_lines) * 20)
+        glVertex2f(10, len(info_lines) * 20)
         glEnd()
         
         # Render main info text
         y_offset = 20
         for line in info_lines:
             if line == info_lines[0]:
-                text_surface = self.font_large.render(line, True, (200, 200, 200))
+                text_surface = self.font_medium.render(line, True, (200, 200, 200))
                 y_offset += 10
             else:
                 text_surface = self.font_small.render(line, True, (180, 180, 180))
@@ -868,56 +880,136 @@ class Network3DVisualizer:
                         GL_RGBA, GL_UNSIGNED_BYTE, text_data)
             y_offset += text_surface.get_height() + 5
         
+        # Add UAV info to main panel if UAV is selected
+        if self.selected_uav is not None and self.selected_uav in self.env.uavs:
+            uav = self.env.uavs[self.selected_uav]
+            uav_lines = [
+                f"Selected UAV {self.selected_uav}:",
+                f"Position: ({uav.position[0]:.0f}, {uav.position[1]:.0f}, {uav.position[2]:.0f})",
+                f"Power: {uav.current_power:.2f}W / {uav.max_power:.2f}W",
+                f"Battery: {uav.current_battery:.0f} / {uav.battery_capacity:.0f} J",
+                f"Energy Used:", 
+                f"   - Movement: {uav.energy_used.get('movement', 'N/A'):.2f} J",
+                f"   - Transmission: {uav.energy_used.get('transmission', 'N/A'):.2f} J",
+                f"Resource Blocks: {len([rb for rb in uav.RBs if rb.allocated_ue_id != -1])} / {len(uav.RBs)} allocated"
+            ]
+
+        # Draw main info background
+        glColor4f(0.1, 0.15, 0.3, 0.85)
+        glBegin(GL_QUADS)
+        glVertex2f(10, 290)
+        glVertex2f(350, 290)
+        glVertex2f(350, 290 + len(uav_lines) * 20)
+        glVertex2f(10, 290 + len(uav_lines) * 20)
+        glEnd()
+        
+        # Render main info text
+        y_offset = 300
+        for line in uav_lines:
+            if line == uav_lines[0]:
+                text_surface = self.font_medium.render(line, True, (200, 200, 240))
+                y_offset += 10
+            else:
+                text_surface = self.font_small.render(line, True, (200, 200, 240))
+            
+            text_data = pygame.image.tostring(text_surface, "RGBA", True)
+            glRasterPos2f(20, y_offset)
+            glDrawPixels(text_surface.get_width(), text_surface.get_height(),
+                        GL_RGBA, GL_UNSIGNED_BYTE, text_data)
+            y_offset += text_surface.get_height() + 5
+        
+
+        # Draw info panel for queueing stats of all DAs
+        da_lines = [f"Demand Area Queue Data:"]
+        for uav in self.env.uavs.values():
+            da_lines.append("-"*120)  # Blank line between UAVs
+            for da in [da for da in self.env.demand_areas.values() if da.uav_id == uav.id]:
+                
+                
+                avg_da_delay_satisfaction = np.mean([self.env.ues[ue.id].delay_satisfaction for ue in self.env.ues.values() if ue.assigned_da == da.id])
+                avg_da_reliability = np.mean([self.env.ues[ue.id].reliability for ue in self.env.ues.values() if ue.assigned_da == da.id])
+                avg_throughput = np.mean([self.env.ues[ue.id].throughput for ue in self.env.ues.values() if ue.assigned_da == da.id])
+                avg_throughput_satisfaction = np.mean([self.env.ues[ue.id].throughput_satisfaction for ue in self.env.ues.values() if ue.assigned_da == da.id])
+
+                da_lines.append(f"UAV {da.uav_id} {da.slice_type:<5} {da.distance_level:<6}: Num UEs: {len(da.user_ids):<3} | Avg Delay Sat: {avg_da_delay_satisfaction:<5.2f} |  Avg Reliability: {avg_da_reliability:<5.2f} | Avg Throughput: {avg_throughput / 1e6:<8.2f} Mbps | Avg TP Sat: {avg_throughput_satisfaction:<5.2f}")
+
+        # Render DA text
+        if self.show_das:
+            # Draw DA info background
+            panel_y = 10
+            glColor4f(0.1, 0.15, 0.25, 0.85)
+            glBegin(GL_QUADS)
+            glVertex2f(370, panel_y)
+            glVertex2f(1300, panel_y)
+            glVertex2f(1300, panel_y + len(da_lines) * 14 + 20)
+            glVertex2f(370, panel_y + len(da_lines) * 14 + 20)
+            glEnd()
+
+            y_offset = panel_y + 10
+            for line in da_lines:            
+                if line == da_lines[0]:
+                    text_surface = self.font_medium.render(line, True, (200, 220, 240))
+                    y_offset += 10
+                else:
+                    text_surface = self.font_small.render(line, True, (180, 220, 240))
+                text_data = pygame.image.tostring(text_surface, "RGBA", True)
+                glRasterPos2f(380, y_offset)
+                glDrawPixels(text_surface.get_width(), text_surface.get_height(),
+                            GL_RGBA, GL_UNSIGNED_BYTE, text_data)
+                y_offset += text_surface.get_height() + 2
+        
         # Selected UE info panel
         if self.selected_ue is not None and self.selected_ue in self.env.ues:
             ue = self.env.ues[self.selected_ue]
-            ue_info = self.env.get_UEs_throughput_demand_and_satisfaction()
             beam_status = self.env.get_ue_beam_status(self.selected_ue)
+                
+            ue_lines = [
+                f"Selected UE {self.selected_ue}:",
+                f"Type: {ue.slice_type.upper()} {self.env.demand_areas[ue.assigned_da].distance_level}" if ue.assigned_uav is not None else "Type: N/A",
+                f"Position: ({ue.position[0]:.0f}, {ue.position[1]:.0f})",
+                f"Velocity: ({ue.velocity[0]:.1f}, {ue.velocity[1]:.1f}) m/s",
+                f"Assigned UAV: {ue.assigned_uav}",
+                f"Angle to UAV: {beam_status['angle']:.1f}° / {beam_status['max_angle']:.1f}°" if beam_status['covered'] else "Angle to UAV: N/A",
+                f"Beam Coverage: {'YES' if beam_status['covered'] else 'NO'}",
+                f"RBs Allocated: {len(ue.assigned_rb) if ue.assigned_rb else 0}",
+                f"Throughput: {ue.throughput/1e6:.2f} / {self.env.qos_profiles[ue.slice_type].min_rate/1e6:.2f} Mbps",
+                f"Reliability: {ue.reliability:.2%} / {self.env.qos_profiles[ue.slice_type].min_reliability:.2%}",
+                f"Delay: {self.env.delay_cache.get(ue.id, {}).get('total', np.inf):.2f} / {self.env.qos_profiles[ue.slice_type].max_latency:.2f} ms"
+            ]
+            ue_lines.extend([f"  - {key:<15} : {value:.3f} ms" for key, value in self.env.delay_cache.get(ue.id, {}).get("breakdown", {}).items()])
+
+            # print(self.env.delay_cache.get(ue.id, 'N/A'))
+
+            # Draw UE info background
+            panel_y = 600
+            glColor4f(0.1, 0.15, 0.1, 0.85)
+            glBegin(GL_QUADS)
+            glVertex2f(10, panel_y)
+            glVertex2f(350, panel_y)
+            glVertex2f(350, panel_y + len(ue_lines) * 15 + 20)
+            glVertex2f(10, panel_y + len(ue_lines) * 15 + 20)
+            glEnd()
             
-            if self.selected_ue in ue_info:
-                throughput, demand, satisfaction = ue_info[self.selected_ue]
-                
-                ue_lines = [
-                    f"Selected UE {self.selected_ue}:",
-                    f"Type: {ue.slice_type.upper()} {self.env.demand_areas[ue.assigned_da].distance_level}" if ue.assigned_uav is not None else "Type: N/A",
-                    f"Position: ({ue.position[0]:.0f}, {ue.position[1]:.0f})",
-                    f"Assigned UAV: {ue.assigned_uav}",
-                    f"Beam Coverage: {'YES' if beam_status['covered'] else 'NO'}",
-                    f"Angle to UAV: {beam_status['angle']:.1f}° / {beam_status['max_angle']:.1f}°" if beam_status['covered'] else "Angle to UAV: N/A",
-                    f"Margin: {beam_status['margin']:.1f}°" if beam_status['covered'] else "Margin: N/A",
-                    f"RBs Allocated: {len(ue.assigned_rb) if ue.assigned_rb else 0}",
-                    f"Throughput: {throughput/1e6:.2f} Mbps",
-                    f"Demand: {demand/1e6:.2f} Mbps",
-                    f"Satisfaction: {satisfaction:.1%}",
-                    f"Velocity: ({ue.velocity[0]:.1f}, {ue.velocity[1]:.1f}) m/s"
-                ]
-                
-                # Draw UE info background
-                panel_y = 350
-                glColor4f(0.1, 0.15, 0.1, 0.85)
-                glBegin(GL_QUADS)
-                glVertex2f(10, panel_y)
-                glVertex2f(350, panel_y)
-                glVertex2f(350, panel_y + len(ue_lines) * 22 + 20)
-                glVertex2f(10, panel_y + len(ue_lines) * 22 + 20)
-                glEnd()
-                
-                # Render UE text
-                y_offset = panel_y + 10
-                for line in ue_lines:
+            # Render UE text
+            y_offset = panel_y + 10
+            for line in ue_lines:
+                if line == ue_lines[0]:
+                    text_surface = self.font_medium.render(line, True, (180, 220, 180))
+                    y_offset += 10
+                else:
                     text_surface = self.font_small.render(line, True, (180, 220, 180))
-                    text_data = pygame.image.tostring(text_surface, "RGBA", True)
-                    glRasterPos2f(20, y_offset)
-                    glDrawPixels(text_surface.get_width(), text_surface.get_height(),
-                                GL_RGBA, GL_UNSIGNED_BYTE, text_data)
-                    y_offset += text_surface.get_height() + 2
+                text_data = pygame.image.tostring(text_surface, "RGBA", True)
+                glRasterPos2f(20, y_offset)
+                glDrawPixels(text_surface.get_width(), text_surface.get_height(),
+                            GL_RGBA, GL_UNSIGNED_BYTE, text_data)
+                y_offset += text_surface.get_height() + 2
         
         # UAV Control Panel
         if self.show_control_panel and self.selected_uav is not None:
             panel_x = self.control_panel_x
             panel_y = self.control_panel_y
             panel_w = self.control_panel_width
-            panel_h = 750  # Increased to fit all 9 bandwidth sliders + 5 basic sliders
+            panel_h = 800  # Increased to fit all 9 bandwidth sliders + 5 basic sliders
             
             # Draw control panel background
             glColor4f(0.15, 0.1, 0.15, 0.9)
@@ -959,13 +1051,13 @@ class Network3DVisualizer:
                         GL_RGBA, GL_UNSIGNED_BYTE, text_data)
             
             # Section dividers
-            # Draw "Basic Controls" header
-            basic_header = "--- Basic Controls ---"
-            text_surface = self.font_small.render(basic_header, True, (150, 150, 180))
-            text_data = pygame.image.tostring(text_surface, "RGBA", True)
-            glRasterPos2f(panel_x + 70, panel_y + 85)
-            glDrawPixels(text_surface.get_width(), text_surface.get_height(),
-                        GL_RGBA, GL_UNSIGNED_BYTE, text_data)
+            # # Draw "Basic Controls" header
+            # basic_header = "--- UAV Controls ---"
+            # text_surface = self.font_small.render(basic_header, True, (150, 150, 180))
+            # text_data = pygame.image.tostring(text_surface, "RGBA", True)
+            # glRasterPos2f(panel_x + 70, panel_y + 85)
+            # glDrawPixels(text_surface.get_width(), text_surface.get_height(),
+            #             GL_RGBA, GL_UNSIGNED_BYTE, text_data)
             
 
             
@@ -1040,26 +1132,47 @@ class Network3DVisualizer:
                     self.uav_paths[uav_id].pop(0)
     
     def step_simulation(self):
-        """Execute one simulation step"""
+        """Execute one step with profiling"""
+        self.profiler.start_timer('step_total')
+        
         if self.agent:
+            self.profiler.start_timer('agent_action')
             actions = self.agent.select_actions(self.observations, explore=False)
-            self.observations, reward, done, info = self.env.step(actions)
-            
-            self.update_uav_paths()
-            
-            self.current_metrics = {
-                'qos': info['qos_satisfaction'],
-                'energy': info['energy_efficiency'],
-                'fairness': info['fairness_level']
-            }
+            self.profiler.end_timer('agent_action')
+        
+        self.profiler.start_timer('env_step')
+        self.observations, reward, done, info = self.env.step(actions)
+        self.profiler.end_timer('env_step')
+        
+        self.update_uav_paths()
+        
+        self.current_metrics = {
+            'qos': info['qos_satisfaction'],
+            'energy': info['energy_usage_level'],
+            'fairness': info['fairness_level']
+        }
+        
+        # Record profiling data
+        self.profiler.record_step(self.step_count, self.env, info)
+        self.profiler.record_memory(f'step_{self.step_count}')
+        self.step_count += 1
+        
+        # Periodic logging
+        self.profiler.log_summary(self.step_count, self.log_interval)
+        
+        self.profiler.end_timer('step_total')
     
     def reset_simulation(self):
-        """Reset simulation"""
+        """Reset with profiling"""
+        self.profiler.start_timer('reset')
         self.observations = self.env.reset()
         for uav_id in self.uav_paths:
             self.uav_paths[uav_id] = []
         self.current_metrics = {'qos': 0.0, 'energy': 0.0, 'fairness': 0.0}
         self.selected_ue = None
+        self.step_count = 0
+        self.profiler.end_timer('reset')
+        self.profiler.record_memory('after_reset')
     
     def handle_mouse(self):
         """Handle mouse input"""
@@ -1105,9 +1218,14 @@ class Network3DVisualizer:
     
     def run(self):
         """Main loop"""
+        print(f"\n{'='*80}")
+        print(f"VISUALIZER STARTED" + (" [PROFILING ENABLED]" if self.profiler.enabled else ""))
+        print(f"{'='*80}\n")
+
         running = True
         
         while running:
+
             # Step simulation if not paused
             if not self.paused:
                 self.step_simulation()
@@ -1122,8 +1240,6 @@ class Network3DVisualizer:
                     elif event.key == pygame.K_p:  # NEW: Pause toggle
                         self.paused = not self.paused
                     elif event.key == pygame.K_SPACE:
-                        # if self.paused:
-                        # print("Stepping simulation by one step")
                         self.step_simulation()  # Single step when paused
                         self.update_sliders_from_uav()
                     elif event.key == pygame.K_r:
@@ -1143,9 +1259,6 @@ class Network3DVisualizer:
                     elif event.key == pygame.K_RETURN:  # NEW: Apply slider values
                         if self.show_control_panel:
                             self.apply_sliders_to_uav()
-                            # Re-associate UEs and DAs after manual UAV movement
-                            # self.env._associate_ues_to_uavs()
-                            # self.env._form_demand_areas()
                     elif event.key == pygame.K_n:  # NEW: Normalize bandwidth
                         if self.show_control_panel:
                             self.normalize_bandwidth_sliders()
@@ -1169,23 +1282,43 @@ class Network3DVisualizer:
             self.handle_mouse()
             
             # Draw
+            self.profiler.start_timer('render')
             self.draw_3d_scene()
             self.draw_2d_overlay()
+            pygame.display.flip()
+            self.profiler.end_timer('render')
             
             # Update animation
             if not self.paused:
                 self.animation_time += 0.016
             
-            pygame.display.flip()
             self.clock.tick(60)
+
+        
+        if self.profiler.enabled:
+            print("\n" + "="*80)
+            print("GENERATING PROFILING REPORT...")
+            print("="*80 + "\n")
+            self.profiler.generate_report('profiling_report.png')
         
         pygame.quit()
 
 
 def main():
     parser = argparse.ArgumentParser(description='Enhanced UAV Network 3D Visualizer')
-    parser.add_argument('--checkpoint', type=str, default="./saved_models/model22",
+    parser.add_argument('--checkpoint', type=str, default="./saved_models/model29",
                        help='Path to trained model checkpoint')
+    
+    # ============================================
+    # PROFILING ARGUMENTS 
+    # ============================================
+    parser.add_argument('--profile', action='store_true',
+                       help='Enable performance profiling')
+    parser.add_argument('--profile-interval', type=int, default=100,
+                       help='Profiling log interval (default: 100 steps)')
+    parser.add_argument('--profile-output', type=str, default='profiling_report.png',
+                       help='Output path for profiling report')
+    
     args = parser.parse_args()
     
     # Create environment
@@ -1195,25 +1328,29 @@ def main():
     agent = None
     if args.checkpoint:
         model_dir = args.checkpoint
-        model_checkpoint = os.path.join(model_dir, "checkpoints/checkpoint_step_30000.pth")
-        
+        model_checkpoint = "./saved_models/model29/checkpoints/checkpoint_step_390000.pth"
         env_config = Configuration("./config/environment/default.yaml")
         num_agents = env_config.system.num_uavs
         obs_dim = 80
         action_dim = 13
-        
         agent = MADRLAgent(num_agents=num_agents, obs_dim=obs_dim, action_dim=action_dim, training=False)
         agent.load_models(model_checkpoint)
-        print(f"Loaded model from {model_checkpoint}")
+        print(f"✓ Loaded model from {model_checkpoint}")
+
+    agent = DynamicHeightGreedyAgent(len(env.uavs), 80, 13, env)
     
-    # Create and run visualizer
-    # agent = DynamicHeightGreedyAgent(env.num_uavs, 58, 13, env)
-    # agent = AdaptiveHeightGreedyAgent(env.num_uavs, 58, 13, env)
-    # agent = CoverageMaximizationGreedyAgent(env.num_uavs, 58, 13, env)
-    # agent = RandomAgent(env.num_uavs, 58, 13, env)
+    # Create visualizer with profiling
+    visualizer = Network3DVisualizer(
+        env, 
+        agent,
+        enable_profiling=args.profile,
+        log_interval=args.profile_interval
+    )
     
-    visualizer = Network3DVisualizer(env, agent)
+    # Run
     visualizer.run()
+    
+    print("\n✓ Visualizer closed gracefully")
 
 if __name__ == "__main__":
     main()

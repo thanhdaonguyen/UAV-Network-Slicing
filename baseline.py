@@ -1638,9 +1638,9 @@ def main():
     parser = argparse.ArgumentParser(description='Compare baseline agents')
     parser.add_argument('--env_config', type=str, default='config/environment/default.yaml',
                        help='Path to environment config')
-    parser.add_argument('--checkpoint', type=str, default='saved_models/model26/checkpoints/checkpoint_step_100000.pth',
+    parser.add_argument('--checkpoint', type=str, default='saved_models/model29/checkpoints/checkpoint_step_390000.pth',
                        help='Path to trained MADRL model checkpoint')
-    parser.add_argument('--steps', type=int, default=2000,
+    parser.add_argument('--steps', type=int, default=10000,
                        help='Number of steps for evaluation')
     parser.add_argument('--seed', type=int, default=45,
                        help='Random seed for reproducibility')
@@ -1678,11 +1678,8 @@ def main():
     
     # Random Agent
     random_agent = RandomAgent(num_agents, obs_dim, action_dim)
-    # agents.append((random_agent, "Random"))
-    
-    # Greedy Agent
-    greedy_agent = GreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((greedy_agent, "Greedy"))
+    agents.append((random_agent, "Random"))
+
 
     # Additional Baseline Agents
     smart_greedy_agent = SmartGreedyAgent(num_agents, obs_dim, action_dim, env)
@@ -1698,10 +1695,10 @@ def main():
     agents.append((dynamic_height_agent, "Dynamic Height Greedy"))
 
     coverage_greedy_agent = CoverageMaximizationGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((coverage_greedy_agent, "Coverage Greedy"))
+    agents.append((coverage_greedy_agent, "Coverage Greedy"))
 
     adaptive_height_agent = AdaptiveHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((adaptive_height_agent, "Adaptive Height Greedy"))
+    agents.append((adaptive_height_agent, "Adaptive Height Greedy"))
 
     # 3. Trained MADRL Agent (if checkpoint provided)
     if args.checkpoint:
