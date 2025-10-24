@@ -979,7 +979,11 @@ class NetworkSlicingEnv:
 
             # CALCULATE DROP RATE ()
             if rho != 1:
-                uav.avg_drop_rate = ( (rho**(uav_buffer_size + 1)) * (1 - rho) ) / (1 - rho**(uav_buffer_size + 1))
+                try:
+                    avg_drop_rate = ( (rho**(uav_buffer_size + 1)) * (1 - rho) ) / (1 - rho**(uav_buffer_size + 1))
+                except:
+                    avg_drop_rate = 1.0
+                uav.avg_drop_rate = avg_drop_rate
             elif uav_service_rate == 0:
                 uav.avg_drop_rate = 1.0
             else:

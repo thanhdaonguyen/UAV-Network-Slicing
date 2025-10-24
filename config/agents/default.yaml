@@ -24,7 +24,7 @@ maddpg:
   # Training parameters
   warmup_steps: 1000              # Steps before training starts
   train_freq: 1                   # Training frequency (steps)
-  batch_size: 512
+  batch_size: 256
   gamma: 0.99                     # Discount factor
   buffer_size: 300000             # Replay buffer size
   tau: 0.01                       # Soft update coefficient

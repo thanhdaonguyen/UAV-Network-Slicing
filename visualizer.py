@@ -1137,7 +1137,7 @@ class Network3DVisualizer:
         
         if self.agent:
             self.profiler.start_timer('agent_action')
-            actions = self.agent.select_actions(self.observations, explore=False)
+            actions = self.agent.select_actions(self.observations, explore=True)
             self.profiler.end_timer('agent_action')
         
         self.profiler.start_timer('env_step')
@@ -1328,16 +1328,16 @@ def main():
     agent = None
     if args.checkpoint:
         model_dir = args.checkpoint
-        model_checkpoint = "./saved_models/model29/checkpoints/checkpoint_step_390000.pth"
+        model_checkpoint = "./saved_models/model44/checkpoints/checkpoint_step_30000.pth"
         env_config = Configuration("./config/environment/default.yaml")
         num_agents = env_config.system.num_uavs
         obs_dim = 80
         action_dim = 13
-        agent = MADRLAgent(num_agents=num_agents, obs_dim=obs_dim, action_dim=action_dim, training=False)
+        agent = MADRLAgent(num_agents=num_agents, obs_dim=obs_dim, action_dim=action_dim, training=True)
         agent.load_models(model_checkpoint)
         print(f"✓ Loaded model from {model_checkpoint}")
 
-    agent = DynamicHeightGreedyAgent(len(env.uavs), 80, 13, env)
+    # agent = DynamicHeightGreedyAgent(len(env.uavs), 80, 13, env)
     
     # Create visualizer with profiling
     visualizer = Network3DVisualizer(

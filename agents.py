@@ -487,10 +487,11 @@ class MADRLAgent:
                 action = self.actors[agent_id](obs_tensor).cpu().numpy()[0]
             
             # Add SMALL additive noise (not replacement)
-            if explore and self.exploration_noise > 0:
+            if explore and self.exploration_noise > 0.001:
                 # Position: small Gaussian noise
-                pos_noise = np.random.normal(0, self.exploration_noise, size=3)
+                pos_noise = np.random.normal(0, 5 * self.exploration_noise, size=3)
                 action[:3] = np.clip(action[:3] + pos_noise, -1, 1)
+                # print(action[:3])
                 
                 # Power: small Gaussian noise
                 power_noise = np.random.normal(0, self.exploration_noise, size=1)
@@ -498,70 +499,70 @@ class MADRLAgent:
                 
                 # Bandwidth: Dirichlet noise for valid distribution
                 if len(action) > 4:
-                    alpha = 20.0 / (self.exploration_noise + 0.1)  # Higher alpha = less noise
-                    noise = np.random.dirichlet(alpha * action[4:] + 0.1)
-                    action[4:] = 0.6 * action[4:] + 0.4 * noise
+                    noise = np.random.uniform(0, 1, size=len(action[4:]))
+                    noise = noise / noise.sum()
+                    action[4:] = (1 - self.exploration_noise) * action[4:] + self.exploration_noise * noise
                     action[4:] = action[4:] / action[4:].sum()
                 
             actions[agent_id] = action
         
         return actions
 
-    def select_actions(self, observations, explore=True):
-        """OPTIMIZED: Batch process all agents at once"""
-        actions = {}
+    # def select_actions(self, observations, explore=True):
+    #     """OPTIMIZED: Batch process all agents at once"""
+    #     actions = {}
         
-        # ============================================
-        # OPTIMIZATION: Process all agents in one batch
-        # ============================================
+    #     # ============================================
+    #     # OPTIMIZATION: Process all agents in one batch
+    #     # ============================================
         
-        # Stack observations
-        obs_list = [observations[i] for i in range(self.num_agents)]
-        obs_batch = torch.FloatTensor(np.stack(obs_list))  # (num_agents, obs_dim)
+    #     # Stack observations
+    #     obs_list = [observations[i] for i in range(self.num_agents)]
+    #     obs_batch = torch.FloatTensor(np.stack(obs_list))  # (num_agents, obs_dim)
         
-        if self.pin_memory:
-            obs_batch = obs_batch.pin_memory()  # Faster CPU→GPU transfer
+    #     if self.pin_memory:
+    #         obs_batch = obs_batch.pin_memory()  # Faster CPU→GPU transfer
         
-        obs_batch = obs_batch.to(self.device, non_blocking=True)  # Async transfer
+    #     obs_batch = obs_batch.to(self.device, non_blocking=True)  # Async transfer
         
-        # Set all actors to eval mode
-        for actor in self.actors:
-            actor.eval()
+    #     # Set all actors to eval mode
+    #     for actor in self.actors:
+    #         actor.eval()
         
-        with torch.no_grad():
-            # Get actions for all agents
-            action_list = []
-            for i in range(self.num_agents):
-                action = self.actors[i](obs_batch[i:i+1])  # Process one at a time (sequential)
-                action_list.append(action)
+    #     with torch.no_grad():
+    #         # Get actions for all agents
+    #         action_list = []
+    #         for i in range(self.num_agents):
+    #             action = self.actors[i](obs_batch[i:i+1])  # Process one at a time (sequential)
+    #             action_list.append(action)
             
-            # Stack and move to CPU
-            actions_tensor = torch.cat(action_list, dim=0).cpu().numpy()
+    #         # Stack and move to CPU
+    #         actions_tensor = torch.cat(action_list, dim=0).cpu().numpy()
         
-        # Convert to dict
-        for i in range(self.num_agents):
-            action = actions_tensor[i]
+    #     # Convert to dict
+    #     for i in range(self.num_agents):
+    #         action = actions_tensor[i]
             
-            # Add exploration noise
-            if explore and self.exploration_noise > 0:
-                # Position noise
-                pos_noise = np.random.normal(0, self.exploration_noise * 0.5, size=3)
-                action[:3] = np.clip(action[:3] + pos_noise, -1, 1)
+    #         # Add exploration noise
+    #         if explore and self.exploration_noise > 0:
+    #             # Position noise
+    #             pos_noise = np.random.normal(0, self.exploration_noise * 0.5, size=3)
+    #             action[:3] = np.clip(action[:3] + pos_noise, -1, 1)
                 
-                # Power noise
-                power_noise = np.random.normal(0, self.exploration_noise * 0.3, size=1)
-                action[3:4] = np.clip(action[3:4] + power_noise, 0, 1)
+    #             # Power noise
+    #             power_noise = np.random.normal(0, self.exploration_noise * 0.3, size=1)
+    #             action[3:4] = np.clip(action[3:4] + power_noise, 0, 1)
                 
-                # Bandwidth noise (Dirichlet)
-                if len(action) > 4:
-                    alpha = 20.0 / (self.exploration_noise + 0.1)
-                    dirichlet_noise = np.random.dirichlet(alpha * action[4:] + 0.1)
-                    action[4:] = 0.6 * action[4:] + 0.4 * dirichlet_noise
-                    action[4:] = action[4:] / action[4:].sum()
+    #             # Bandwidth noise (Dirichlet)
+    #             if len(action) > 4:
+    #                 alpha = 20.0 / (self.exploration_noise + 0.1)
+    #                 dirichlet_noise = np.random.dirichlet(alpha * action[4:] + 0.1)
+    #                 action[4:] = 0.6 * action[4:] + 0.4 * dirichlet_noise
+    #                 action[4:] = action[4:] / action[4:].sum()
             
-            actions[i] = action
+    #         actions[i] = action
         
-        return actions
+    #     return actions
     
     def store_transition(self, observations: Dict[int, np.ndarray],
                         actions: Dict[int, np.ndarray],
@@ -667,113 +668,6 @@ class MADRLAgent:
             'critic_loss': critic_loss.item()
         }
     
-    def train_BC(self):
-        """Train the MADRL agent"""
-        if len(self.buffer) < self.batch_size:
-            return {}
-        
-        # Set all models to training mode
-        for actor in self.actors:
-            actor.train()
-        for actor_target in self.actor_targets:
-            actor_target.train()  # Targets should also be in train mode
-        self.critic.train()
-        self.critic_target.train()
-        
-        # Sample batch
-        states, actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
-        states = states.to(self.device)
-        actions = actions.to(self.device)
-        rewards = rewards.to(self.device).unsqueeze(-1)
-        next_states = next_states.to(self.device)
-        dones = dones.to(self.device).unsqueeze(-1)
-        
-        # Reshape for individual agents
-        states_per_agent = states.view(self.batch_size, self.num_agents, self.obs_dim)
-        actions_per_agent = actions.view(self.batch_size, self.num_agents, self.action_dim)
-        next_states_per_agent = next_states.view(self.batch_size, self.num_agents, self.obs_dim)
-        
-        # Update critic
-        with torch.no_grad():
-            # Get target actions from target actors
-            current_actionss = []
-            for i in range(self.num_agents):
-                current_actions = self.actor_targets[i](next_states_per_agent[:, i, :])
-                current_actionss.append(current_actions)
-            
-            current_actionss = torch.stack(current_actionss, dim=1)
-            current_actionss = current_actionss.view(self.batch_size, -1)
-            
-            # Compute target Q-value
-            target_q = self.critic_target(next_states_per_agent.view(self.batch_size, -1), current_actionss)
-            target_value = rewards + (1 - dones) * self.gamma * target_q
-
-        # Current Q-value
-        current_q = self.critic(states, actions)
-        
-        # Critic loss
-        critic_loss = F.mse_loss(current_q, target_value)
-        
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
-        self.critic_optimizer.step()
-        
-        # Update actors
-        actor_losses = []
-
-        for i in range(self.num_agents):
-            # Get current actions from all agents
-            current_actions = []
-            for j in range(self.num_agents):
-                if j == i:
-                    # For agent i, use its actor network
-                    action = self.actors[j](states_per_agent[:, j, :])
-                else:
-                    # For other agents, use their current actions (detached)
-                    action = actions_per_agent[:, j, :].detach()
-                current_actions.append(action)
-            
-            current_actions = torch.stack(current_actions, dim=1)
-            current_actions = current_actions.view(self.batch_size, -1)
-        
-            # RL loss
-            rl_loss = -self.critic(states, current_actions).mean()
-            
-            # ADD THIS: Behavioral Cloning loss
-            # actions_per_agent[:, i, :] are greedy's actions
-            greedy_action = self.actors[i](states_per_agent[:, i, :])
-            current_actions = actions_per_agent[:, i, :].detach()
-            
-            # MSE loss for continuous actions
-            bc_loss = F.mse_loss(greedy_action, current_actions)
-            
-            # Or for bandwidth specifically (since it's critical):
-            bandwidth_pred = greedy_action[:, 4:]
-            bandwidth_target = current_actions[:, 4:]
-            bandwidth_bc_loss = F.mse_loss(bandwidth_pred, bandwidth_target)
-            
-            # Combined loss
-            # total_loss = rl_loss + 0.5 * bc_loss  # Adjust weight
-            # total_loss = rl_loss + 0.3 * bc_loss + 0.2 * bandwidth_bc_loss
-            total_loss = rl_loss * (1 - self.bc_weight) + (0.6 * bc_loss + 0.4 * bandwidth_bc_loss) * self.bc_weight
-            
-            self.actor_optimizers[i].zero_grad()
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actors[i].parameters(), 1.0)
-            self.actor_optimizers[i].step()
-            
-            actor_losses.append(total_loss.item())
-        
-        # Soft update target networks
-        self._soft_update()
-        
-        return {
-            'actor_losses': actor_losses,
-            'critic_loss': critic_loss.item()
-        }
-    
-    # agents.py - Add to MADRLAgent class
 
     def train_rl_with_bc_regularization(self, bc_weight):
         """
