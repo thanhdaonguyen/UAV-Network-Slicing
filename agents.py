@@ -1012,6 +1012,8 @@ class MADRLAgent:
         # Update Actors
         # ============================================
         actor_losses = []
+        rl_losses = []
+        bc_losses = []
         
         for i in range(self.num_agents):
             current_actions = []
@@ -1046,6 +1048,8 @@ class MADRLAgent:
             self.actor_optimizers[i].step()
             
             actor_losses.append(total_loss.item())
+            rl_losses.append(rl_loss_normalized.item())
+            bc_losses.append(bc_loss.item())
         
         # Soft update
         self._soft_update()
@@ -1053,6 +1057,8 @@ class MADRLAgent:
         return {
             'actor_losses': actor_losses,
             'critic_loss': critic_loss.item(),
+            'rl_losses': rl_losses,
+            'bc_losses': bc_losses,
             'bc_weight': bc_weight
         }
 
