@@ -396,6 +396,24 @@ class MADRLAgent:
         self.lr_actor = self.config.maddpg.actor_lr
         self.lr_critic = self.config.maddpg.critic_lr
         self.device = torch.device(device)
+
+        # if device == 'auto':
+        #     if torch.cuda.is_available():
+        #         self.device = torch.device('cuda')
+        #         print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
+                
+        #         # Enable optimizations
+        #         torch.backends.cudnn.benchmark = True  # Auto-tune kernels
+        #         torch.backends.cudnn.deterministic = False  # Faster but non-deterministic
+                
+        #         # Set memory allocator settings
+        #         torch.cuda.empty_cache()
+                
+        #     else:
+        #         self.device = torch.device('cpu')
+        #         print("⚠️  GPU not available, using CPU")
+        # else:
+        #     self.device = torch.device(device)
     
 
         # Initialize actor networks for each agent
@@ -411,13 +429,27 @@ class MADRLAgent:
             
             self.actors.append(actor)
             self.actor_targets.append(actor_target)
-            self.actor_optimizers.append(optim.Adam(actor.parameters(), lr=self.lr_actor))
+            if self.device.type == 'cuda':
+                self.actor_optimizers.append(
+                    optim.AdamW(actor.parameters(), lr=self.lr_actor, fused=True)  # Fused for speed!
+                )
+            else:
+                self.actor_optimizers.append(
+                    optim.Adam(actor.parameters(), lr=self.lr_actor)
+                )
 
         # Initialize centralized critic
         self.critic = CriticNetwork(obs_dim, action_dim, num_agents).to(self.device)
         self.critic_target = CriticNetwork(obs_dim, action_dim, num_agents).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.lr_critic)
+        if self.device.type == 'cuda':
+            self.critic_optimizer = optim.AdamW(
+                self.critic.parameters(), lr=self.lr_critic, fused=True
+            )
+        else:
+            self.critic_optimizer = optim.Adam(
+                self.critic.parameters(), lr=self.lr_critic
+            )
         
         # Experience buffer
         self.buffer = ExperienceBuffer(self.buffer_size)
@@ -429,6 +461,11 @@ class MADRLAgent:
         self.min_noise = self.config.exploration.gaussian_min
         if not training:
             self.exploration_noise = 0.0  # No exploration during evaluation
+
+        self.pin_memory = (self.device.type == 'cuda')
+        
+        print(f"  Batch size: {self.batch_size}")
+        print(f"  Pin memory: {self.pin_memory}")
 
         # ADD THIS for verification:
         print(f"🎮 Agent Device: {self.device}")
@@ -467,6 +504,62 @@ class MADRLAgent:
                     action[4:] = action[4:] / action[4:].sum()
                 
             actions[agent_id] = action
+        
+        return actions
+
+    def select_actions(self, observations, explore=True):
+        """OPTIMIZED: Batch process all agents at once"""
+        actions = {}
+        
+        # ============================================
+        # OPTIMIZATION: Process all agents in one batch
+        # ============================================
+        
+        # Stack observations
+        obs_list = [observations[i] for i in range(self.num_agents)]
+        obs_batch = torch.FloatTensor(np.stack(obs_list))  # (num_agents, obs_dim)
+        
+        if self.pin_memory:
+            obs_batch = obs_batch.pin_memory()  # Faster CPU→GPU transfer
+        
+        obs_batch = obs_batch.to(self.device, non_blocking=True)  # Async transfer
+        
+        # Set all actors to eval mode
+        for actor in self.actors:
+            actor.eval()
+        
+        with torch.no_grad():
+            # Get actions for all agents
+            action_list = []
+            for i in range(self.num_agents):
+                action = self.actors[i](obs_batch[i:i+1])  # Process one at a time (sequential)
+                action_list.append(action)
+            
+            # Stack and move to CPU
+            actions_tensor = torch.cat(action_list, dim=0).cpu().numpy()
+        
+        # Convert to dict
+        for i in range(self.num_agents):
+            action = actions_tensor[i]
+            
+            # Add exploration noise
+            if explore and self.exploration_noise > 0:
+                # Position noise
+                pos_noise = np.random.normal(0, self.exploration_noise * 0.5, size=3)
+                action[:3] = np.clip(action[:3] + pos_noise, -1, 1)
+                
+                # Power noise
+                power_noise = np.random.normal(0, self.exploration_noise * 0.3, size=1)
+                action[3:4] = np.clip(action[3:4] + power_noise, 0, 1)
+                
+                # Bandwidth noise (Dirichlet)
+                if len(action) > 4:
+                    alpha = 20.0 / (self.exploration_noise + 0.1)
+                    dirichlet_noise = np.random.dirichlet(alpha * action[4:] + 0.1)
+                    action[4:] = 0.6 * action[4:] + 0.4 * dirichlet_noise
+                    action[4:] = action[4:] / action[4:].sum()
+            
+            actions[i] = action
         
         return actions
     
