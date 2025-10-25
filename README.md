@@ -55,16 +55,15 @@ Common flags
 - Use the provided logging utilities to capture metrics and checkpoints.
 
 ## Results / Figures
-Replace the placeholders with actual output images from your simulations/training.
 
-![Training loss curve](./docs/images/training_loss.png)  
-![Slice throughput comparison](./docs/images/throughput_comparison.png)  
-![Per-slice latency CDF](./docs/images/latency_cdf.png)
+![Baseline comparison](docs/images/comparison.png)  
+![Visualizer](docs/images/visualizer.png)
+
 
 (If images are not present yet, add them to docs/images/ and commit.)
 
 ## How to cite
-If you use this code or results in your work, please cite this project. Example BibTeX entry (fill in details):
+If you use this code or results in your work, please cite this project kindly. Example BibTeX entry (fill in details):
 
 @misc{nguyen2025qrl,
     author = {Thanh D. Nguyen},
