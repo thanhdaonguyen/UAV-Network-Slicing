@@ -137,6 +137,7 @@ class Network3DVisualizer:
         
         self.env = env
         self.agent = agent
+
         self.window_width = window_width
         self.window_height = window_height
         self.enable_profiling = enable_profiling
@@ -211,9 +212,6 @@ class Network3DVisualizer:
         self.control_panel_width = 280
         self.sliders = {}
         self.init_control_sliders()
-        
-        # Initialize
-        self.reset_simulation()
     
     def init_control_sliders(self):
         """Initialize control sliders for UAV adjustment"""
@@ -1124,19 +1122,18 @@ class Network3DVisualizer:
         """Execute one step with profiling"""
         
         if self.agent:
-            actions = self.agent.select_actions(self.observations, explore=False)
+            observation = self.env._get_observations()
+            actions = self.agent.select_actions(observation, explore=False)
 
-        self.observations, reward, done, info = self.env.step(actions)
+        self.env.step(actions)
         self.update_uav_paths()
     
     def reset_simulation(self):
         """Reset with profiling"""
-        self.observations = self.env.reset()
-        for uav_id in self.uav_paths:
-            self.uav_paths[uav_id] = []
-        # self.env.stats = {'reward': 0.0, 'qos': 0.0, 'energy': 0.0, 'fairness': 0.0}
-        self.selected_ue = None
-    
+        self.env.reset()
+        self.uav_paths = {uav_id: [] for uav_id in self.env.uavs.keys()}
+        self.animation_time = 0.0
+        
     def handle_mouse(self):
         """Handle mouse input"""
         mouse_pos = pygame.mouse.get_pos()
@@ -1278,7 +1275,7 @@ def profile_training_step():
     
     # Initialize environment and agent
     env = NetworkSlicingEnv(config_path="config/environment/default.yaml")
-    obs = env.reset()
+    obs = env._get_observations()
     
     agent = MADRLAgent(
         num_agents=env.num_uavs,
@@ -1353,7 +1350,7 @@ def main():
     agent = None
     if args.checkpoint:
         model_dir = args.checkpoint
-        model_checkpoint = "./saved_models/model29/checkpoints/checkpoint_step_390000.pth"
+        model_checkpoint = "./commit_models/model1/checkpoints/checkpoint_step_400000.pth"
         env_config = Configuration("./config/environment/default.yaml")
         num_agents = env_config.system.num_uavs
         obs_dim = 80
