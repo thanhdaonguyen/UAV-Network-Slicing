@@ -9,6 +9,8 @@ from abc import ABC, abstractmethod
 import json
 from datetime import datetime
 from tqdm import tqdm
+import glob
+import pandas as pd
 
 
 class BaselineAgent(ABC):
@@ -1395,7 +1397,7 @@ class EvaluationFramework:
             metrics['rewards'].append(reward)
             metrics['cumulative_rewards'].append(cumulative_reward)
             metrics['qos'].append(info['qos_satisfaction'])
-            metrics['energy'].append(info['energy_efficiency'])
+            metrics['energy'].append(info['energy_usage_level'])
             metrics['fairness'].append(info['fairness_level'])
             metrics['active_ues'].append(info['active_ues'])
             
@@ -1432,8 +1434,75 @@ class EvaluationFramework:
         
         return results
     
-    def compare_agents(self, results_list: List[Dict]):
+    def compare_agents(self, results_dir: str):
         """Generate comparison plots for multiple agents"""
+
+        # Find all CSV files in the directory
+        csv_files = glob.glob(os.path.join(results_dir, '*.csv'))
+        
+        if not csv_files:
+            raise ValueError(f"No CSV files found in {results_dir}")
+        
+        print(f"Found {len(csv_files)} agent result files")
+        
+        # Load data from each CSV file
+        results_list = []
+        
+        for csv_path in csv_files:
+            # Extract agent name from filename
+            filename = os.path.basename(csv_path)
+            agent_name = filename.replace('.csv', '').replace('_', ' ')
+            
+            print(f"  Loading: {agent_name}")
+            
+            # Read CSV file
+            try:
+                df = pd.read_csv(csv_path)
+                
+                # Extract metrics from dataframe
+                metrics = {
+                    'steps': df['step'].values,
+                    'rewards': df['reward'].values,
+                    'cumulative_rewards': df['cumulative_reward'].values,
+                    'qos': df['qos'].values,
+                    'energy': df['energy'].values,
+                    'fairness': df['fairness'].values,
+                    'active_ues': df['active_ues'].values
+                }
+                
+                # Calculate summary statistics
+                summary = {
+                    'total_reward': float(metrics['cumulative_rewards'][-1]) if len(metrics['cumulative_rewards']) > 0 else 0.0,
+                    'mean_qos': float(np.mean(metrics['qos'])),
+                    'mean_energy': float(np.mean(metrics['energy'])),
+                    'mean_fairness': float(np.mean(metrics['fairness'])),
+                    'mean_active_ues': float(np.mean(metrics['active_ues']))
+                }
+                
+                # Create result dictionary
+                result = {
+                    'agent_name': agent_name,
+                    'metrics': metrics,
+                    'summary': summary
+                }
+                
+                results_list.append(result)
+                
+                print(f"    ✓ Loaded {len(metrics['steps'])} steps")
+                print(f"    Total reward: {summary['total_reward']:.2f}")
+                
+            except Exception as e:
+                print(f"    ⚠️  Error loading {filename}: {e}")
+                continue
+        
+        if not results_list:
+            raise ValueError("No valid agent results could be loaded")
+        
+        # Sort by agent name for consistent ordering
+        results_list.sort(key=lambda x: x['agent_name'])
+        
+        print(f"\n✓ Successfully loaded {len(results_list)} agents")
+        print(f"Generating comparison plots...")
         
         print(f"\nGenerating comparison plots...")
         
@@ -1610,7 +1679,7 @@ class EvaluationFramework:
         # Save detailed metrics as CSV for each agent
         for result in results_list:
             agent_name = result['agent_name'].replace(' ', '_').replace('(', '').replace(')', '')
-            csv_path = os.path.join(self.run_dir, f'{agent_name}_metrics.csv')
+            csv_path = os.path.join(self.run_dir, f'{agent_name}.csv')
             
             import csv
             with open(csv_path, 'w', newline='') as f:
@@ -1638,9 +1707,9 @@ def main():
     parser = argparse.ArgumentParser(description='Compare baseline agents')
     parser.add_argument('--env_config', type=str, default='config/environment/default.yaml',
                        help='Path to environment config')
-    parser.add_argument('--checkpoint', type=str, default='saved_models/model29/checkpoints/checkpoint_step_390000.pth',
+    parser.add_argument('--checkpoint', type=str, default='saved_models_p2/model29/checkpoints/checkpoint_step_390000.pth',
                        help='Path to trained MADRL model checkpoint')
-    parser.add_argument('--steps', type=int, default=10000,
+    parser.add_argument('--steps', type=int, default=2000,
                        help='Number of steps for evaluation')
     parser.add_argument('--seed', type=int, default=45,
                        help='Random seed for reproducibility')
@@ -1677,28 +1746,28 @@ def main():
     agents = []
     
     # Random Agent
-    random_agent = RandomAgent(num_agents, obs_dim, action_dim)
-    agents.append((random_agent, "Random"))
+    # random_agent = RandomAgent(num_agents, obs_dim, action_dim)
+    # agents.append((random_agent, "Random"))
 
 
-    # Additional Baseline Agents
-    smart_greedy_agent = SmartGreedyAgent(num_agents, obs_dim, action_dim, env)
-    agents.append((smart_greedy_agent, "Smart Greedy"))
+    # # Additional Baseline Agents
+    # smart_greedy_agent = SmartGreedyAgent(num_agents, obs_dim, action_dim, env)
+    # agents.append((smart_greedy_agent, "Smart Greedy"))
 
-    qos_greedy_agent = QoSAwareHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((qos_greedy_agent, "QoS-Aware Greedy"))
+    # qos_greedy_agent = QoSAwareHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    # # agents.append((qos_greedy_agent, "QoS-Aware Greedy"))
 
-    energy_aware_agent = EnergyAwareGreedyAgent(num_agents, obs_dim, action_dim, env)
-    agents.append((energy_aware_agent, "Energy-Aware Greedy"))
+    # energy_aware_agent = EnergyAwareGreedyAgent(num_agents, obs_dim, action_dim, env)
+    # agents.append((energy_aware_agent, "Energy-Aware Greedy"))
 
-    dynamic_height_agent = DynamicHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    agents.append((dynamic_height_agent, "Dynamic Height Greedy"))
+    # dynamic_height_agent = DynamicHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    # agents.append((dynamic_height_agent, "Dynamic Height Greedy"))
 
-    coverage_greedy_agent = CoverageMaximizationGreedyAgent(num_agents, obs_dim, action_dim, env)
-    agents.append((coverage_greedy_agent, "Coverage Greedy"))
+    # coverage_greedy_agent = CoverageMaximizationGreedyAgent(num_agents, obs_dim, action_dim, env)
+    # agents.append((coverage_greedy_agent, "Coverage Greedy"))
 
-    adaptive_height_agent = AdaptiveHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    agents.append((adaptive_height_agent, "Adaptive Height Greedy"))
+    # adaptive_height_agent = AdaptiveHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    # agents.append((adaptive_height_agent, "Adaptive Height Greedy"))
 
     # 3. Trained MADRL Agent (if checkpoint provided)
     if args.checkpoint:
@@ -1709,28 +1778,41 @@ def main():
             training=False
         )
         trained_agent.load_models(args.checkpoint)
-        agents.append((trained_agent, "MADRL (Trained)"))
+        agents.append((trained_agent, "MADRL (Model 29)"))
         print(f"✓ Loaded trained model from {args.checkpoint}\n")
+
+    # Another trained agent
+    # agent2 = MADRLAgent(
+    #         num_agents=num_agents,
+    #         obs_dim=obs_dim,
+    #         action_dim=action_dim,
+    #         training=False
+    #     )
+    # agent2.load_models('saved_models/model46/checkpoints/checkpoint_step_410000.pth')
+    # agents.append((agent2, "MADRL (Model 46)"))
     
     # Evaluate all agents on the same environment
-    results_list = []
-    for agent, agent_name in agents:
-        # Reset environment with same seed for fair comparison
-        np.random.seed(args.seed)
+    # results_list = []
+    # for agent, agent_name in agents:
+    #     # Reset environment with same seed for fair comparison
+    #     np.random.seed(args.seed)
         
-        results = evaluator.evaluate_agent(
-            agent, 
-            agent_name,
-            env=env,
-            max_steps=args.steps
-        )
-        results_list.append(results)
+    #     results = evaluator.evaluate_agent(
+    #         agent, 
+    #         agent_name,
+    #         env=env,
+    #         max_steps=args.steps
+    #     )
+    #     results_list.append(results)
     
+    # # Save results
+    # evaluator.save_results(results_list)
+
     # Generate comparison plots
-    evaluator.compare_agents(results_list)
+    # evaluator.compare_agents(evaluator.run_dir)
+    evaluator.compare_agents("baseline_results/run_20251025_171841")
     
-    # Save results
-    evaluator.save_results(results_list)
+
     
     print(f"\n{'='*60}")
     print("Evaluation Complete!")

@@ -313,9 +313,10 @@ class NetworkSlicingEnv:
             'arrivals': 0,
             'departures': 0,
             'handovers': 0,
-            'throughput_satisfaction': 0.0,
-            'delay_satisfaction': 0.0,
-            'reliability_satisfaction': 0,
+            'reward': 0.0,
+            'qos': 0.0,
+            'energy': 0.0,
+            'fairness': 0.0,
         }
         
         # Initialize entities
@@ -355,7 +356,8 @@ class NetworkSlicingEnv:
                 max_power=self.uav_params.max_power,  # Watts
                 current_power=self.uav_params.initial_power,
                 battery_capacity=self.uav_params.battery_capacity,  # Joules
-                current_battery=self.uav_params.initial_battery,  # Start fully charged
+                # current_battery=self.uav_params.initial_battery,  # Start fully charged
+                current_battery=0.0,  # Start with zero power
                 velocity_max=self.uav_params.velocity_max,  # m/s
                 buffer_size=self.uav_buffer_size,  # bits
                 energy_used={"movement": 0.0, "transmission": 0.0},
@@ -611,7 +613,7 @@ class NetworkSlicingEnv:
 
         # Calculate rewards
         # print("Is throughput cache valid?", self.throughput_cache_valid)
-        reward, qos_reward, energy_penalty, fairness_reward = self.calculate_global_reward()
+        reward, reward_breakdown = self.calculate_global_reward()
 
         # Update time
         self.current_time += self.T_L
@@ -622,11 +624,19 @@ class NetworkSlicingEnv:
         
         # Get new observations
         observations = self._get_observations()
-        
+
+        self.stats['reward'] = reward
+        self.stats['qos'] = reward_breakdown['qos_reward']
+        self.stats['energy'] = reward_breakdown['energy_penalty']
+        self.stats['fairness'] = reward_breakdown['fairness_reward']
+        self.stats['avg_throughput_sat'] = reward_breakdown.get('avg_throughput_sat', 0.0)
+        self.stats['avg_delay_sat'] = reward_breakdown.get('avg_delay_sat', np.inf)
+        self.stats['avg_reliability_sat'] = reward_breakdown.get('avg_reliability_sat', 0.0)
+
         info = {
-            'qos_satisfaction': qos_reward,
-            'energy_usage_level': energy_penalty,
-            'fairness_level': fairness_reward,
+            'qos_satisfaction': reward_breakdown['qos_reward'],
+            'energy_usage_level': reward_breakdown['energy_penalty'],
+            'fairness_level': reward_breakdown['fairness_reward'],
             'active_ues': len([ue for ue in self.ues.values() if ue.is_active]),
             'ue_arrivals': self.stats['arrivals'],
             'ue_departures': self.stats['departures']
@@ -863,8 +873,6 @@ class NetworkSlicingEnv:
             for _ in range(int(self.T_L)):
                 ue_traffic_pattern.append(np.random.poisson(avg_arrival_rate))
             ue.traffic_pattern = ue_traffic_pattern
-
-
 
     def _handle_arrivals(self):
         """Separate function for handling arrivals (cleaner code)"""
@@ -1650,29 +1658,35 @@ class NetworkSlicingEnv:
             fairness_reward: Fairness component
         """
         # ============================================
-        # 1. Calculate QoS reward (now separated!)
+        # Calculate QoS reward (now separated!)
         # ============================================
-        qos_reward, da_metrics = self._calculate_qos_reward()
-        urllc_penalty = self._calculate_urllc_penalty(da_metrics)
+        qos_reward, breakdown_qos = self._calculate_qos_reward()
         energy_penalty = self._calculate_energy_consumption_penalty()
         fairness_reward = self._calculate_fairness_index()
         
         # ============================================
-        # 4. Combine with weights
+        # Combine with weights
         # ============================================
         alpha = self.reward_weights.qos
         beta = self.reward_weights.energy
         gamma = self.reward_weights.fairness
-        delta = 0.4  # URLLC penalty weight
-        
+
         total_reward = (
             alpha * qos_reward -
             beta * energy_penalty +
-            gamma * fairness_reward -
-            delta * urllc_penalty
+            gamma * fairness_reward
         )
 
-        return total_reward, qos_reward, energy_penalty, fairness_reward
+        breakdown = {
+            'qos_reward': qos_reward,
+            'energy_penalty': energy_penalty,
+            'fairness_reward': fairness_reward,
+            'avg_throughput_sat': breakdown_qos['avg_throughput_sat'],
+            'avg_delay_sat': breakdown_qos['avg_delay_sat'],
+            'avg_reliability_sat': breakdown_qos['avg_reliability_sat'],
+        }
+
+        return total_reward, breakdown
 
     def _calculate_qos_reward(self) -> Tuple[float, Dict]:
         """
@@ -1686,9 +1700,13 @@ class NetworkSlicingEnv:
         if not self.sinr_cache_valid:
             self._update_sinr_cache()
         
-        # Track metrics per DA
-        da_metrics = {}  # {da_id: {'satisfactions': [...], 'delays': [...], 'slice_type': str}}
-        
+
+        slice_weight_per_ue = np.array([])
+        throughput_sats = np.array([])
+        delay_sats = np.array([])
+        reliability_sats = np.array([])
+        overall_satisfactions = np.array([])
+
         # ============================================
         # Collect metrics for all active UEs
         # ============================================
@@ -1696,18 +1714,17 @@ class NetworkSlicingEnv:
             if not ue.is_active:
                 continue
             
+            # Slice weight of UE
+            slice_weight_per_ue = np.append(slice_weight_per_ue, self.slice_weights[ue.slice_type])
+
             # Calculate individual QoS components
             throughput_sat, ue_throughput = self._calculate_throughput_satisfaction(ue)
             delay_sat, total_delay_ms = self._calculate_delay_satisfaction(ue)
             reliability_sat, ue_reliability = self._calculate_reliability_satisfaction(ue)
 
-            ue.latency_ms = total_delay_ms  # Store for potential logging
-            ue.throughput = ue_throughput  # Store for potential logging
-            ue.reliability = ue_reliability  # Store for potential logging
-
-            ue.throughput_satisfaction = throughput_sat
-            ue.delay_satisfaction = delay_sat
-            ue.reliability_satisfaction = reliability_sat
+            throughput_sats = np.append(throughput_sats, throughput_sat)
+            delay_sats = np.append(delay_sats, delay_sat)
+            reliability_sats = np.append(reliability_sats, reliability_sat)
 
             # Combine using slice-specific weights
             ue_qos_weights = self.qos_weights[ue.slice_type]
@@ -1716,40 +1733,22 @@ class NetworkSlicingEnv:
                 ue_qos_weights['delay'] * delay_sat +
                 ue_qos_weights['reliability'] * reliability_sat
             )
-            
-            # Store in DA metrics
-            da_id = ue.assigned_da
-            if da_id not in da_metrics:
-                da_metrics[da_id] = {
-                    'satisfactions': [],
-                    'delays': [],
-                    'throughputs': [],
-                    'reliabilities': [],
-                    'slice_type': ue.slice_type
-                }
-            
-            da_metrics[da_id]['satisfactions'].append(overall_satisfaction)
-            da_metrics[da_id]['delays'].append(total_delay_ms)
-            da_metrics[da_id]['throughputs'].append(ue_throughput)
-            da_metrics[da_id]['reliabilities'].append(ue_reliability)
-        
+
+            overall_satisfactions = np.append(overall_satisfactions, overall_satisfaction)
+
         # ============================================
         # Aggregate QoS reward across all DAs
         # ============================================
-        aggregate_satisfaction = 0.0
-        total_weight = 0.0
-        
-        for da_id, metrics in da_metrics.items():
-            avg_satisfaction = np.mean(metrics['satisfactions'])
-            slice_type = metrics['slice_type']
-            weight = self.slice_weights[slice_type] * len(metrics['satisfactions'])
-            
-            aggregate_satisfaction += avg_satisfaction * weight
-            total_weight += weight
-        
-        qos_reward = aggregate_satisfaction / total_weight if total_weight > 0 else 0.0
 
-        return qos_reward, da_metrics
+        qos_reward = np.sum(slice_weight_per_ue * overall_satisfactions) / np.sum(slice_weight_per_ue)
+
+        breakdown = {
+            'avg_throughput_sat': np.mean(throughput_sats) if len(throughput_sats) > 0 else 0.0,
+            'avg_delay_sat': np.mean(delay_sats) if len(delay_sats) > 0 else np.inf,
+            'avg_reliability_sat': np.mean(reliability_sats) if len(reliability_sats) > 0 else 0.0,
+        }
+
+        return qos_reward, breakdown
 
     def _calculate_throughput_satisfaction(self, ue) -> Tuple[float, float]:
         """
@@ -1768,6 +1767,9 @@ class NetworkSlicingEnv:
         # Normalize by minimum required rate
         min_rate = self.qos_profiles[ue.slice_type].min_rate
         satisfaction = min(ue_throughput / min_rate, 1.0)
+
+        ue.throughput_satisfaction = satisfaction
+        ue.throughput = ue_throughput
         
         return satisfaction, ue_throughput
 
@@ -1794,6 +1796,9 @@ class NetworkSlicingEnv:
         else:
             excess = total_delay_ms - max_latency
             satisfaction = np.exp(-excess / max_latency)
+
+        ue.delay_satisfaction = satisfaction
+        ue.latency_ms = total_delay_ms
         
         return satisfaction, total_delay_ms
 
@@ -1828,6 +1833,9 @@ class NetworkSlicingEnv:
         # Normalize
         min_reliability = self.qos_profiles[ue.slice_type].min_reliability
         satisfaction = min(reliability / min_reliability, 1.0)
+
+        ue.reliability = reliability
+        ue.reliability_satisfaction = satisfaction
         
         return satisfaction, reliability
 
@@ -1893,6 +1901,7 @@ class NetworkSlicingEnv:
         zero_power_penalty = sum(1 for uav in self.uavs.values() if uav.current_power < 0.03 * uav.max_power)
         if zero_power_penalty > 0:
             energy_consumption_penalty += zero_power_penalty * 0.2  # Add 0.2 penalty per zero-power UAV
+
         return energy_consumption_penalty
  
     def _calculate_fairness_index(self) -> float:

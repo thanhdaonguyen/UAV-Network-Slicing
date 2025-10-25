@@ -1,4 +1,6 @@
-# train.py
+# train_optimized_periodic.py - PERIODIC CHECK VERSION
+# Simple optimization: Only check for toggle every N steps
+
 import numpy as np
 from environment import NetworkSlicingEnv
 from agents import BCWeightScheduler, MADRLAgent
@@ -7,18 +9,25 @@ import os
 from tqdm import tqdm
 import re
 from utils import Configuration
+from baseline import RandomAgent, GreedyAgent
 import cProfile
 import pstats
-import io
 from pstats import SortKey
-from baseline import RandomAgent, GreedyAgent
+import io
 
 class TrainingManager:
-    """Manages the training process for UAV network slicing MADRL"""
+    """Manages the training process with periodic visualizer toggle checks"""
 
     def __init__(self, env_config_path: str = None, train_config_path: str = None, 
-             checkpoint_path: str = None, enable_visualization: bool = False):
-        # Load configurations using your Configuration class
+                 checkpoint_path: str = None, enable_visualization: bool = False,
+                 toggle_check_interval: int = 10):
+        """
+        Args:
+            toggle_check_interval: Check for toggle every N steps (default: 10)
+                                 Higher = less overhead, less responsive
+                                 Lower = more overhead, more responsive
+        """
+                # Load configurations using your Configuration class
         env_config = Configuration(env_config_path)
         train_config = Configuration(train_config_path)
 
@@ -127,12 +136,117 @@ class TrainingManager:
         self._save_config_files()
 
 
-        # Visualization
+        # Visualization        
         self.enable_visualization = enable_visualization
+        self.visualizer = None
+        self.toggle_check_interval = toggle_check_interval
+        
+        # Initialize visualizer if enabled
         if self.enable_visualization:
-            self.visualizer = Network3DVisualizer(self.env, self.MADRLagent)
-        else:
-            self.visualizer = None
+            self._initialize_visualizer()
+        
+        print("\n" + "="*60)
+        print("🎮 VISUALIZER CONTROLS:")
+        print(f"  V       - Toggle visualizer ON/OFF (checked every {toggle_check_interval} steps)")
+        print("  ESC     - Close visualizer (turn off)")
+        print("="*60 + "\n")
+
+    def _initialize_visualizer(self):
+        """Initialize or reinitialize the visualizer"""
+        if self.visualizer is None:
+            try:
+                import pygame
+                pygame.init()
+                self.visualizer = Network3DVisualizer(self.env, self.MADRLagent)
+                self.enable_visualization = True
+                print("✅ Visualizer initialized")
+            except Exception as e:
+                print(f"❌ Failed to initialize visualizer: {e}")
+                self.visualizer = None
+                self.enable_visualization = False
+
+    def _cleanup_visualizer(self):
+        """Cleanup and destroy the visualizer"""
+
+        print("Cleaning up visualizer...")
+        if self.visualizer is not None:
+            try:
+                import pygame
+                pygame.quit()
+                self.visualizer = None
+                self.enable_visualization = False
+                print("🔴 Visualizer closed")
+            except Exception as e:
+                print(f"⚠️  Error cleaning up visualizer: {e}")
+
+    def _handle_visualization_events(self):
+        """Handle events - only called periodically"""
+        if not self.enable_visualization and self.visualizer is None:
+            # When OFF: Check for 'V' key to turn on
+            try:
+                import pygame
+                if not pygame.get_init():
+                    pygame.init()
+                
+                for event in pygame.event.get():
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_v:
+                            self._initialize_visualizer()
+                            return
+            except:
+                pass
+            return
+        
+        if not self.enable_visualization or self.visualizer is None:
+            return
+        
+        import pygame
+        
+        # When ON: Handle all events
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self._cleanup_visualizer()
+                return
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_v:
+                    self._cleanup_visualizer()
+                    return
+                elif event.key == pygame.K_ESCAPE:
+                    self._cleanup_visualizer()
+                    return
+                elif event.key == pygame.K_c:
+                    self.visualizer.show_connections = not self.visualizer.show_connections
+                elif event.key == pygame.K_p:
+                    self.visualizer.show_paths = not self.visualizer.show_paths
+                elif event.key == pygame.K_d:
+                    self.visualizer.show_das = not self.visualizer.show_das
+                elif event.key == pygame.K_g:
+                    self.visualizer.show_grid = not self.visualizer.show_grid
+                elif event.key == pygame.K_TAB:
+                    if self.visualizer.selected_uav is None:
+                        self.visualizer.selected_uav = 0
+                    else:
+                        self.visualizer.selected_uav = (self.visualizer.selected_uav + 1) % len(self.visualizer.env.uavs)
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 4:
+                    self.visualizer.camera.zoom(-50)
+                elif event.button == 5:
+                    self.visualizer.camera.zoom(50)
+        
+        self.visualizer.handle_mouse()
+
+    def _update_visualization(self):
+        """Update the visualization window"""
+        if not self.enable_visualization or self.visualizer is None:
+            return
+        
+        import pygame
+        
+        self.visualizer.draw_3d_scene()
+        self.visualizer.draw_2d_overlay()
+        self.visualizer.animation_time += 0.016
+        pygame.display.flip()
+        self.visualizer.clock.tick(60)
 
     def _initialize_metrics(self):  
         # Initialize tracking variables for step-based training
@@ -144,6 +258,10 @@ class TrainingManager:
             'fairness_level': [],
             'active_ues': [],
             'noise': [],
+            'avg_throughput_sat': [],
+            'avg_delay_sat': [],
+            'avg_reliability_sat': [],
+            'handovers': []
         }
 
         # Add separate training metrics (NEW)
@@ -186,20 +304,22 @@ class TrainingManager:
         print(f"✓ Saved config files to {self.model_dir}")
 
     def train(self):
-
-        """Step-based training loop with comprehensive logging"""
-        print(f"Starting step-based training for {self.config['total_training_steps']} steps")
+        """Training loop with PERIODIC event checking"""
+        print(f"Starting training for {self.config['total_training_steps']} steps")
+        print(f"Toggle check interval: every {self.toggle_check_interval} steps")
         
-        # Initialize environment
         observations = self.env.reset()
-        
-        # Main training loop
-        # In this simulation, each training step corresponds to one large time step
         progress_bar = tqdm(range(self.config['total_training_steps']), desc="Training Steps")
         
-        for global_step in progress_bar:
+        for step in progress_bar:
+            # OPTIMIZATION: Only check for toggle every N steps
+            if self.enable_visualization:
+                self._handle_visualization_events()
+            elif step % self.toggle_check_interval == 0:
+                self._handle_visualization_events()
+            # Otherwise: ZERO overhead from event handling!
             
-            # if global_step < self.config['greedy_experience_gathering_steps']:
+            # if step < self.config['greedy_experience_gathering_steps']:
             greedy_actions = self.GreedyAgent.select_actions(observations)
             actions = self.MADRLagent.select_actions(observations, explore=True)
             
@@ -208,7 +328,7 @@ class TrainingManager:
 
             # Check if we should train
             should_train = (
-                (global_step + 1) % self.config['train_frequency'] == 0 and
+                (step + 1) % self.config['train_frequency'] == 0 and
                 len(self.MADRLagent.buffer) >= self.config['min_buffer_size']
             )
             
@@ -237,7 +357,7 @@ class TrainingManager:
 
                 # Store training metrics
                 if actor_losses:  # Only store if training actually happened
-                    self.training_metrics['steps'].append(global_step)
+                    self.training_metrics['steps'].append(step)
                     self.training_metrics['actor_losses'].append(np.mean(actor_losses))
                     self.training_metrics['critic_losses'].append(np.mean(critic_losses))
                     self.training_metrics['iterations'].append(self.config['train_iterations'])
@@ -265,33 +385,34 @@ class TrainingManager:
                     })
             
             # Store environment metrics (every step)
-            self._store_step_metrics(global_step, actions, reward, info)
+            self._store_step_metrics(step, actions, reward, info)
             
             # Update visualization if enabled
-            if self.enable_visualization:
-                # if global_step % 10 == 0:  # Update visualization every 5 steps to reduce overhead
-                    self._update_visualization()
-            
+            if self.enable_visualization and self.visualizer is not None:
+                self._update_visualization()
+
             observations = next_observations
             
             # Periodic operations
-            if (global_step + 1) % self.config['save_interval'] == 0 and global_step > 0:
-                self._save_checkpoint(global_step + 1)
+            if (step + 1) % self.config['save_interval'] == 0 and step > 0:
+                self._save_checkpoint(step + 1)
                 self._save_metrics_to_csv()
             
-            if (global_step + 1) % self.config['plot_interval'] == 0 and global_step > 0:
+            if (step + 1) % self.config['plot_interval'] == 0 and step > 0:
+            # if (step + 1) % 2000 == 0 and step > 0:
                 
-                self._plot_training_progress(global_step + 1)
+                self._plot_training_progress(step + 1)
             
             # Update exploration noise less frequently
-            if  (global_step + 1) % self.config['exploration_noise_update_interval'] == 0:
+            if  (step + 1) % self.config['exploration_noise_update_interval'] == 0:
                 self.MADRLagent.exploration_noise = max(
                     self.MADRLagent.min_noise,
                     self.MADRLagent.exploration_noise * self.MADRLagent.noise_decay
                 )
         
-        self.env.print_cache_stats()
-        print("Training completed!")
+        # Cleanup
+        if self.visualizer is not None:
+            self._cleanup_visualizer()
 
     def _store_step_metrics(self, step, actions, reward, info):
         """Store metrics for this step"""
@@ -302,6 +423,10 @@ class TrainingManager:
         self.step_metrics['fairness_level'].append(info['fairness_level'])
         self.step_metrics['active_ues'].append(info['active_ues'])
         self.step_metrics['noise'].append(getattr(self.MADRLagent, 'exploration_noise', 0))
+        self.step_metrics['avg_throughput_sat'].append(self.env.stats.get('avg_throughput_sat', 0))
+        self.step_metrics['avg_delay_sat'].append(self.env.stats.get('avg_delay_sat', np.inf))
+        self.step_metrics['avg_reliability_sat'].append(self.env.stats.get('avg_reliability_sat', 0))
+        self.step_metrics['handovers'].append(self.env.stats.get('handovers', 0))
 
         # Store actions of each agent for analysis if needed
         for i, action in actions.items():
@@ -318,7 +443,7 @@ class TrainingManager:
         import pandas as pd
         import os
         
-        fig, axes = plt.subplots(3, 4, figsize=(18, 10))
+        fig, axes = plt.subplots(4, 4, figsize=(20, 16))
         fig.suptitle(f'Training Progress - Step {current_step}', fontsize=16)
         
         # Read data from CSV files
@@ -374,91 +499,92 @@ class TrainingManager:
         
         # Plot 4: Active UEs
         active_ues = step_df['active_ues'].values
-        axes[1, 0].plot(steps, active_ues, 'purple', alpha=0.6)
+        axes[0, 3].plot(steps, active_ues, 'purple', alpha=0.6)
         if len(steps) > 100:
             smoothed_ues = self._moving_average(active_ues, 1000)
-            axes[1, 0].plot(steps[-len(smoothed_ues):], smoothed_ues, 'darkviolet', linewidth=2)
-        axes[1, 0].set_title('Active UEs')
-        axes[1, 0].set_xlabel('Steps')
-        axes[1, 0].set_ylabel('Number of UEs')
-        axes[1, 0].grid(True)
-        
+            axes[0, 3].plot(steps[-len(smoothed_ues):], smoothed_ues, 'darkviolet', linewidth=2)
+        axes[0, 3].set_title('Active UEs')
+        axes[0, 3].set_xlabel('Steps')
+        axes[0, 3].set_ylabel('Number of UEs')
+        axes[0, 3].grid(True)
+
         # Plot 5: Actor losses (only where training occurred)
         if training_df is not None and 'actor_losses' in training_df.columns:
             training_steps = training_df['steps'].values
             actor_losses = training_df['actor_losses'].values
-            axes[1, 1].plot(training_steps, actor_losses, 
+            axes[1, 0].plot(training_steps, actor_losses, 
                         'red', alpha=0.6, marker='o', markersize=3)
-            axes[1, 1].set_title('Actor Losses')
-            axes[1, 1].set_xlabel('Steps')
-            axes[1, 1].set_ylabel('Loss')
-            axes[1, 1].grid(True)
+            axes[1, 0].set_title('Actor Losses')
+            axes[1, 0].set_xlabel('Steps')
+            axes[1, 0].set_ylabel('Loss')
+            axes[1, 0].grid(True)
         
         # Plot 6: Critic losses (only where training occurred)
         if training_df is not None and 'critic_losses' in training_df.columns:
             training_steps = training_df['steps'].values
             critic_losses = training_df['critic_losses'].values
-            axes[1, 2].plot(training_steps, critic_losses, 
+            axes[1, 1].plot(training_steps, critic_losses, 
                         'blue', alpha=0.6, marker='o', markersize=3)
-            axes[1, 2].set_title('Critic Losses')
-            axes[1, 2].set_xlabel('Steps')
-            axes[1, 2].set_ylabel('Loss')
-            axes[1, 2].grid(True)
+            axes[1, 1].set_title('Critic Losses')
+            axes[1, 1].set_xlabel('Steps')
+            axes[1, 1].set_ylabel('Loss')
+            axes[1, 1].grid(True)
 
         # Plot 7: Fairness Level
         fairness_level = step_df['fairness_level'].values
-        axes[2, 0].plot(steps, fairness_level, 'brown', alpha=0.6)
+        axes[1, 2].plot(steps, fairness_level, 'brown', alpha=0.6)
         if len(steps) > 100:
             smoothed_fairness = self._moving_average(fairness_level, 1000)
-            axes[2, 0].plot(steps[-len(smoothed_fairness):], smoothed_fairness, 'saddlebrown', linewidth=2)
-        axes[2, 0].set_title('Average Fairness Level')
-        axes[2, 0].set_xlabel('Steps')
-        axes[2, 0].set_ylabel('Average Fairness Level')
-        axes[2, 0].grid(True)
+            axes[1, 2].plot(steps[-len(smoothed_fairness):], smoothed_fairness, 'saddlebrown', linewidth=2)
+        axes[1, 2].set_title('Average Fairness Level')
+        axes[1, 2].set_xlabel('Steps')
+        axes[1, 2].set_ylabel('Average Fairness Level')
+        axes[1, 2].grid(True)
 
         # Plot 8: Exploration Noise
         noise = step_df['noise'].values
-        axes[2, 1].plot(steps, noise, 'cyan', alpha=0.6)
-        axes[2, 1].set_title('Exploration Noise')
-        axes[2, 1].set_xlabel('Steps')
-        axes[2, 1].set_ylabel('Noise Level')
-        axes[2, 1].grid(True)
+        axes[1, 3].plot(steps, noise, 'cyan', alpha=0.6)
+        axes[1, 3].set_title('Exploration Noise')
+        axes[1, 3].set_xlabel('Steps')
+        axes[1, 3].set_ylabel('Noise Level')
+        axes[1, 3].grid(True)
 
         # Plot 9: Power usage of agents
         for i in range(self.config['num_uavs']):
             col_name = f'agent_{i}_power'
             if col_name in step_df.columns:
                 agent_power = step_df[col_name].values
-                axes[2, 2].plot(steps, agent_power, alpha=0.6, label=f'Agent {i}')
-        axes[2, 2].set_title('Power Usage of Agents')
-        axes[2, 2].set_xlabel('Steps')
-        axes[2, 2].set_ylabel('Power Usage (Watts)')
-        axes[2, 2].legend(loc='lower left')
-        axes[2, 2].grid(True)
+                axes[2, 0].plot(steps, agent_power, alpha=0.6, label=f'Agent {i}')
+        axes[2, 0].set_title('Power Usage of Agents')
+        axes[2, 0].set_xlabel('Steps')
+        axes[2, 0].set_ylabel('Power Usage (Watts)')
+        axes[2, 0].legend(loc='lower left')
+        axes[2, 0].grid(True)
 
         if hasattr(self, 'training_metrics') and 'bc_weights' in self.training_metrics:
             training_df = pd.read_csv(f'{self.model_dir}/training_metrics.csv')
         
+            # Plot 10: BC Weight Schedule (if applicable)
             if 'bc_weights' in training_df.columns:
-                axes[0, 3].plot(
+                axes[2, 1].plot(
                     training_df['steps'], 
                     training_df['bc_weights'], 
                     'purple', 
                     alpha=0.8,
                     linewidth=3
                 )
-                axes[0, 3].set_title('BC Weight Schedule')
-                axes[0, 3].set_xlabel('Steps')
-                axes[0, 3].set_ylabel('BC Weight')
-                axes[0, 3].set_ylim([0, 1])
-                axes[0, 3].grid(True)
+                axes[2, 1].set_title('BC Weight Schedule')
+                axes[2, 1].set_xlabel('Steps')
+                axes[2, 1].set_ylabel('BC Weight')
+                axes[2, 1].set_ylim([0, 1])
+                axes[2, 1].grid(True)
 
-            # NEW: Plot RL Loss vs BC Loss
+            # Plot 11: Plot RL Loss vs BC Loss
             if 'rl_losses' in training_df.columns and 'bc_losses' in training_df.columns:
-                ax_twin = axes[1, 3].twinx()
-                
-                line1 = axes[1, 3].plot(
-                    training_df['steps'], 
+                ax_twin = axes[2, 2].twinx()
+
+                line1 = axes[2, 2].plot(
+                    training_df['steps'],
                     training_df['rl_losses'],
                     'red', 
                     alpha=0.6, 
@@ -472,18 +598,67 @@ class TrainingManager:
                     label='BC Loss'
                 )
                 
-                axes[1, 3].set_title('RL Loss vs BC Loss')
-                axes[1, 3].set_xlabel('Steps')
-                axes[1, 3].set_ylabel('RL Loss', color='red')
+                axes[2, 2].set_title('RL Loss vs BC Loss')
+                axes[2, 2].set_xlabel('Steps')
+                axes[2, 2].set_ylabel('RL Loss', color='red')
                 ax_twin.set_ylabel('BC Loss', color='blue')
-                axes[1, 3].tick_params(axis='y', labelcolor='red')
+                axes[2, 2].tick_params(axis='y', labelcolor='red')
                 ax_twin.tick_params(axis='y', labelcolor='blue')
                 
                 # Combine legends
                 lines = line1 + line2
                 labels = [l.get_label() for l in lines]
-                axes[1, 3].legend(lines, labels, loc='upper right')
-                axes[1, 3].grid(True)
+                axes[2, 2].legend(lines, labels, loc='upper right')
+                axes[2, 2].grid(True)
+
+        # Plot 12: Average Throughput Satisfaction
+        if 'avg_throughput_sat' in step_df.columns:
+            avg_throughput_sat = step_df['avg_throughput_sat'].values
+            axes[2, 3].plot(steps, avg_throughput_sat, 'magenta', alpha=0.6)
+            if len(steps) > 100:
+                smoothed_throughput = self._moving_average(avg_throughput_sat, 1000)
+                axes[2, 3].plot(steps[-len(smoothed_throughput):], smoothed_throughput, 'darkmagenta', linewidth=2)
+            axes[2, 3].set_title('Average Throughput Satisfaction')
+            axes[2, 3].set_xlabel('Steps')
+            axes[2, 3].set_ylabel('Throughput Satisfaction')
+            axes[2, 3].grid(True)
+
+        # Plot 13: Average Delay Satisfaction
+        if 'avg_delay_sat' in step_df.columns:
+            avg_delay_sat = step_df['avg_delay_sat'].values
+            axes[3, 0].plot(steps, avg_delay_sat, 'teal', alpha=0.6)
+            if len(steps) > 100:
+                smoothed_delay = self._moving_average(avg_delay_sat, 1000)
+                axes[3, 0].plot(steps[-len(smoothed_delay):], smoothed_delay, 'darkcyan', linewidth=2)
+            axes[3, 0].set_title('Average Delay Satisfaction')
+            axes[3, 0].set_xlabel('Steps')
+            axes[3, 0].set_ylabel('Delay Satisfaction')
+            axes[3, 0].grid(True)
+        
+        # Plot 14: Average Reliability Satisfaction
+        if 'avg_reliability_sat' in step_df.columns:
+            avg_reliability_sat = step_df['avg_reliability_sat'].values
+            axes[3, 1].plot(steps, avg_reliability_sat, 'olive', alpha=0.6)
+            if len(steps) > 100:
+                smoothed_reliability = self._moving_average(avg_reliability_sat, 1000)
+                axes[3, 1].plot(steps[-len(smoothed_reliability):], smoothed_reliability, 'darkolivegreen', linewidth=2)
+            axes[3, 1].set_title('Average Reliability Satisfaction')
+            axes[3, 1].set_xlabel('Steps')
+            axes[3, 1].set_ylabel('Reliability Satisfaction')
+            axes[3, 1].grid(True)
+
+        # Plot 15: Handovers
+        if 'handovers' in step_df.columns:
+            handovers = step_df['handovers'].values
+            axes[3, 2].plot(steps, handovers, 'sienna', alpha=0.6)
+            if len(steps) > 100:
+                smoothed_handovers = self._moving_average(handovers, 1000)
+                axes[3, 2].plot(steps[-len(smoothed_handovers):], smoothed_handovers, 'peru', linewidth=2)
+            axes[3, 2].set_title('Number of Handovers')
+            axes[3, 2].set_xlabel('Steps')
+            axes[3, 2].set_ylabel('Handovers')
+            axes[3, 2].grid(True)
+
 
         plt.tight_layout()
         
@@ -605,6 +780,8 @@ class TrainingManager:
     def _update_visualization(self):
         """Update the visualization window"""
         import pygame
+
+
         
         # Process pygame events
         for event in pygame.event.get():
@@ -638,6 +815,7 @@ class TrainingManager:
         
         # Handle mouse dragging
         self.visualizer.handle_mouse()
+        self.visualizer.update_sliders_from_uav()
         
         # Redraw the scene
         self.visualizer.draw_3d_scene()
@@ -719,7 +897,7 @@ def main():
     env_config_file = "config/environment/default.yaml"  # or 'config.json' if you have one
     train_config_file = 'config/train/default.yaml'
     checkpoint_file = None
-    # checkpoint_file = "saved_models/model29/checkpoints/checkpoint_step_390000.pth"  # or specify a checkpoint path if resuming training
+    checkpoint_file = "commit_models/model1/checkpoints/checkpoint_step_400000.pth"  # or specify a checkpoint path if resuming training
     # Run profiling if specified
     if args.profile:
         # Run profiling instead of training
@@ -738,3 +916,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

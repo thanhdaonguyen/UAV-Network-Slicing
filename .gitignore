@@ -1,9 +1,13 @@
 # Model files
 saved_models/
 saved_models_p1/
+saved_models_p2/
+
 *.pth
 *.pkl
 *.h5
+
+train_old.py
 
 # Data files
 data/

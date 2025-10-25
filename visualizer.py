@@ -9,9 +9,12 @@ from environment import NetworkSlicingEnv, UAV, UE, DemandArea
 from agents import MADRLAgent
 from utils import *
 import argparse
-import os
 from baseline import *
-import torch
+import io
+import pstats
+import cProfile
+from pstats import SortKey
+
 
 
 class Camera3D:
@@ -129,19 +132,15 @@ class Network3DVisualizer:
     """3D Visualizer for UAV Network Slicing with enhanced controls"""
     
     def __init__(self, env: NetworkSlicingEnv, agent: Optional[MADRLAgent] = None,
-                 window_width: int = 1600, window_height: int = 900, enable_profiling: bool = False, log_interval: int = 100):
+                 window_width: int = 1600, window_height: int = 900, enable_profiling: bool = False):
         pygame.init()
         
         self.env = env
         self.agent = agent
         self.window_width = window_width
         self.window_height = window_height
+        self.enable_profiling = enable_profiling
 
-
-        # Performance profiler
-        self.profiler = PerformanceProfiler(enabled=enable_profiling)
-        self.log_interval = log_interval
-        self.step_count = 0
         
         # OpenGL setup
         self.display = pygame.display.set_mode((window_width, window_height), DOUBLEBUF | OPENGL)
@@ -204,8 +203,7 @@ class Network3DVisualizer:
         self.font_large = pygame.font.SysFont("Consolas", 20, bold=True)
         
         # Performance metrics
-        self.metrics_history = {'qos': [], 'energy': [], 'fairness': []}
-        self.current_metrics = {'qos': 0.0, 'energy': 0.0, 'fairness': 0.0}
+        self.env.stats = {'reward': 0.0, 'qos': 0.0, 'energy': 0.0, 'fairness': 0.0}
         
         # NEW: UAV Control Panel
         self.control_panel_x = window_width - 280
@@ -216,9 +214,6 @@ class Network3DVisualizer:
         
         # Initialize
         self.reset_simulation()
-
-        # Record initial memory
-        self.profiler.record_memory('init_complete')
     
     def init_control_sliders(self):
         """Initialize control sliders for UAV adjustment"""
@@ -288,7 +283,6 @@ class Network3DVisualizer:
     def apply_sliders_to_uav(self):
         """Apply slider values to selected UAV and normalize bandwidth"""
 
-
         if self.selected_uav is not None and self.selected_uav in self.env.uavs:
             uav = self.env.uavs[self.selected_uav]
             
@@ -327,11 +321,6 @@ class Network3DVisualizer:
             
             # Re-allocate resource blocks based on new bandwidth
             self.env._allocate_rbs_fairly()
-        
-        reward, qos_reward, energy_penalty, fairness_reward = self.env.calculate_global_reward()
-        self.current_metrics['qos'] = qos_reward
-        self.current_metrics['energy'] = energy_penalty
-        self.current_metrics['fairness'] = fairness_reward
 
     def normalize_bandwidth_sliders(self):
         """Normalize bandwidth sliders to sum to max bandwidth"""
@@ -755,7 +744,6 @@ class Network3DVisualizer:
     def draw_3d_scene(self):
         """Draw the 3D scene with proper depth ordering"""
 
-        self.profiler.start_timer('draw_3d_scene')
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         
@@ -790,7 +778,6 @@ class Network3DVisualizer:
         for uav in self.env.uavs.values():
             self.draw_uav_enhanced(uav)
 
-        self.profiler.end_timer('draw_3d_scene')
 
     def draw_all_connections(self):
         """Draw all UE-UAV connections separately for better control"""
@@ -829,32 +816,35 @@ class Network3DVisualizer:
         
         glDisable(GL_DEPTH_TEST)
         glDisable(GL_LIGHTING)
+
+        # print(self.env.stats)
         
         # Main info panel
         info_lines = [
             f"Overall Statistics: {'[PAUSED]' if self.paused else ''}",
             f"Time: {self.env.current_time:.1f}s | Step: {(self.env.current_time / self.env.T_L):.0f}",
-            f"QoS             : {self.current_metrics['qos']:.2f}",
-            f"Energy Penalty  : {(1-self.current_metrics['energy']):.2f}",
-            f"Fairness        : {self.current_metrics['fairness']:.2f}",
-            f"UAVs: {len(self.env.uavs)} | UEs: {sum(1 for ue in self.env.ues.values() if ue.is_active)}",
-            f"Uncovered UEs   : {self.env.stats.get('uncovered_ues', 0)} | Covered UEs: {self.env.stats.get('covered_ues', 0)}",
+            f"       Total Reward : {self.env.stats['reward']:.2f}",
+            f"         QoS Reward : {self.env.stats['qos']:.2f}",
+            f"     Energy Penalty : {self.env.stats['energy']:.2f}",
+            f"    Fairness Reward : {self.env.stats['fairness']:.2f}",
+            f" Avg Throughput Sat : {self.env.stats.get('avg_throughput_sat', 0):.2f}",
+            f"      Avg Delay Sat : {self.env.stats.get('avg_delay_sat', np.inf):.2f}",
+            f"Avg Reliability Sat : {self.env.stats.get('avg_reliability_sat', 0):.2f}",
+            f"           Handover : {self.env.stats.get('handovers', 0)} ",
+            f"               UAVs : {len(self.env.uavs):<3}",
+            f"                UEs : {sum(1 for ue in self.env.ues.values() if ue.is_active)}",
+            f"      Uncovered UEs : {self.env.stats.get('uncovered_ues', 0):<3}",
+            f"        Covered UEs : {self.env.stats.get('covered_ues', 0)}",
             "",
-            "Controls:",
-            "P: Pause | Space: Step | R: Reset",
-            "Left Click: Select UE | Tab: Cycle UAV",
-            "U: UAV Panel | N: Normalize BW | Enter: Apply",
-            "C/D/B: Toggle Views | Mouse: Rotate/Pan/Zoom",
-            "ESC: Exit"
+            # "Controls:",
+            # "P: Pause | Space: Step | R: Reset",
+            # "Left Click: Select UE | Tab: Cycle UAV",
+            # "U: UAV Panel | N: Normalize BW | Enter: Apply",
+            # "C/D/B: Toggle Views | Mouse: Rotate/Pan/Zoom",
+            # "ESC: Exit"
         ]
 
          # Add profiling info if enabled
-        if self.profiler.enabled:
-            recent_mem = [s['memory_mb'] for s in self.profiler.memory_snapshots[-10:]] if self.profiler.memory_snapshots else [0]
-            info_lines.extend([
-                "",
-                f"🔍 Memory: {recent_mem[-1]:.1f} MB",
-            ])
         
         # Draw main info background
         glColor4f(0.1, 0.1, 0.15, 0.8)
@@ -897,14 +887,14 @@ class Network3DVisualizer:
         # Draw main info background
         glColor4f(0.1, 0.15, 0.3, 0.85)
         glBegin(GL_QUADS)
-        glVertex2f(10, 290)
-        glVertex2f(350, 290)
-        glVertex2f(350, 290 + len(uav_lines) * 20)
-        glVertex2f(10, 290 + len(uav_lines) * 20)
+        glVertex2f(10, 320)
+        glVertex2f(350, 320)
+        glVertex2f(350, 320 + len(uav_lines) * 20)
+        glVertex2f(10, 320 + len(uav_lines) * 20)
         glEnd()
         
         # Render main info text
-        y_offset = 300
+        y_offset = 340
         for line in uav_lines:
             if line == uav_lines[0]:
                 text_surface = self.font_medium.render(line, True, (200, 200, 240))
@@ -924,7 +914,6 @@ class Network3DVisualizer:
         for uav in self.env.uavs.values():
             da_lines.append("-"*120)  # Blank line between UAVs
             for da in [da for da in self.env.demand_areas.values() if da.uav_id == uav.id]:
-                
                 
                 avg_da_delay_satisfaction = np.mean([self.env.ues[ue.id].delay_satisfaction for ue in self.env.ues.values() if ue.assigned_da == da.id])
                 avg_da_reliability = np.mean([self.env.ues[ue.id].reliability for ue in self.env.ues.values() if ue.assigned_da == da.id])
@@ -1133,46 +1122,20 @@ class Network3DVisualizer:
     
     def step_simulation(self):
         """Execute one step with profiling"""
-        self.profiler.start_timer('step_total')
         
         if self.agent:
-            self.profiler.start_timer('agent_action')
-            actions = self.agent.select_actions(self.observations, explore=True)
-            self.profiler.end_timer('agent_action')
-        
-        self.profiler.start_timer('env_step')
+            actions = self.agent.select_actions(self.observations, explore=False)
+
         self.observations, reward, done, info = self.env.step(actions)
-        self.profiler.end_timer('env_step')
-        
         self.update_uav_paths()
-        
-        self.current_metrics = {
-            'qos': info['qos_satisfaction'],
-            'energy': info['energy_usage_level'],
-            'fairness': info['fairness_level']
-        }
-        
-        # Record profiling data
-        self.profiler.record_step(self.step_count, self.env, info)
-        self.profiler.record_memory(f'step_{self.step_count}')
-        self.step_count += 1
-        
-        # Periodic logging
-        self.profiler.log_summary(self.step_count, self.log_interval)
-        
-        self.profiler.end_timer('step_total')
     
     def reset_simulation(self):
         """Reset with profiling"""
-        self.profiler.start_timer('reset')
         self.observations = self.env.reset()
         for uav_id in self.uav_paths:
             self.uav_paths[uav_id] = []
-        self.current_metrics = {'qos': 0.0, 'energy': 0.0, 'fairness': 0.0}
+        # self.env.stats = {'reward': 0.0, 'qos': 0.0, 'energy': 0.0, 'fairness': 0.0}
         self.selected_ue = None
-        self.step_count = 0
-        self.profiler.end_timer('reset')
-        self.profiler.record_memory('after_reset')
     
     def handle_mouse(self):
         """Handle mouse input"""
@@ -1217,10 +1180,12 @@ class Network3DVisualizer:
             self.mouse_dragging = False
     
     def run(self):
-        """Main loop"""
-        print(f"\n{'='*80}")
-        print(f"VISUALIZER STARTED" + (" [PROFILING ENABLED]" if self.profiler.enabled else ""))
-        print(f"{'='*80}\n")
+        """Main loop to run the visualizer"""
+
+        profiler = None
+        if self.enable_profiling:
+            profiler = cProfile.Profile()
+            profiler.enable()
 
         running = True
         
@@ -1259,9 +1224,6 @@ class Network3DVisualizer:
                     elif event.key == pygame.K_RETURN:  # NEW: Apply slider values
                         if self.show_control_panel:
                             self.apply_sliders_to_uav()
-                    elif event.key == pygame.K_n:  # NEW: Normalize bandwidth
-                        if self.show_control_panel:
-                            self.normalize_bandwidth_sliders()
                     elif event.key == pygame.K_TAB:
                         if self.selected_uav is None:
                             self.selected_uav = 0
@@ -1282,11 +1244,9 @@ class Network3DVisualizer:
             self.handle_mouse()
             
             # Draw
-            self.profiler.start_timer('render')
             self.draw_3d_scene()
             self.draw_2d_overlay()
             pygame.display.flip()
-            self.profiler.end_timer('render')
             
             # Update animation
             if not self.paused:
@@ -1294,14 +1254,83 @@ class Network3DVisualizer:
             
             self.clock.tick(60)
 
+        if self.enable_profiling and profiler is not None:
+            profiler.disable()
         
-        if self.profiler.enabled:
+            # Print profiling results
             print("\n" + "="*80)
-            print("GENERATING PROFILING REPORT...")
-            print("="*80 + "\n")
-            self.profiler.generate_report('profiling_report.png')
-        
+            print("PROFILING RESULTS - TOP 30 FUNCTIONS BY CUMULATIVE TIME")
+            print("="*80)
+            
+            s = io.StringIO()
+            stats = pstats.Stats(profiler, stream=s)
+            stats.strip_dirs()
+            
+            stats.sort_stats(SortKey.CUMULATIVE)
+            stats.print_stats('environment.py|agents.py|baseline.py|utils.py', 30)
+            
+            print(s.getvalue())
         pygame.quit()
+
+
+def profile_training_step():
+    """Profile a single training step to identify bottlenecks"""
+    
+    # Initialize environment and agent
+    env = NetworkSlicingEnv(config_path="config/environment/default.yaml")
+    obs = env.reset()
+    
+    agent = MADRLAgent(
+        num_agents=env.num_uavs,
+        obs_dim=len(list(obs.values())[0]),
+        action_dim=4 + env.num_das_per_slice * 3
+    )
+    
+    # Warm up (fill buffer)
+    print("Warming up buffer...")
+    progress_bar = tqdm(range(1000), desc="Warming Up Buffer")
+    for _ in progress_bar:
+        actions = agent.select_actions(obs, explore=True)
+        next_obs, reward, done, info = env.step(actions)
+        agent.store_transition(obs, actions, actions, reward, next_obs, done)
+        obs = next_obs
+    
+    # Profile the actual training loop
+    print("Starting profiling...")
+    profiler = cProfile.Profile()
+    profiler.enable()
+    
+
+    progress_bar = tqdm(range(2000), desc="Training Steps")
+    for i in progress_bar:
+        # Environment step
+        actions = agent.select_actions(obs, explore=True)
+        next_obs, reward, done, info = env.step(actions)
+        agent.store_transition(obs, actions, actions, reward, next_obs, done)
+        
+        # Training (every 10 steps)
+        if (i + 1) % 10 == 0:
+            for _ in range(10):
+                agent.train()
+        
+        obs = next_obs
+    
+    profiler.disable()
+    
+    # Print results
+    print("\n" + "="*80)
+    print("PROFILING RESULTS - TOP 30 FUNCTIONS BY CUMULATIVE TIME")
+    print("="*80)
+    
+    s = io.StringIO()
+    stats = pstats.Stats(profiler, stream=s)
+    stats.strip_dirs()
+    stats.sort_stats(SortKey.CUMULATIVE)
+    stats.print_stats(30)
+    
+    print(s.getvalue())
+    
+    return stats
 
 
 def main():
@@ -1314,10 +1343,6 @@ def main():
     # ============================================
     parser.add_argument('--profile', action='store_true',
                        help='Enable performance profiling')
-    parser.add_argument('--profile-interval', type=int, default=100,
-                       help='Profiling log interval (default: 100 steps)')
-    parser.add_argument('--profile-output', type=str, default='profiling_report.png',
-                       help='Output path for profiling report')
     
     args = parser.parse_args()
     
@@ -1328,12 +1353,12 @@ def main():
     agent = None
     if args.checkpoint:
         model_dir = args.checkpoint
-        model_checkpoint = "./saved_models/model44/checkpoints/checkpoint_step_30000.pth"
+        model_checkpoint = "./saved_models/model29/checkpoints/checkpoint_step_390000.pth"
         env_config = Configuration("./config/environment/default.yaml")
         num_agents = env_config.system.num_uavs
         obs_dim = 80
         action_dim = 13
-        agent = MADRLAgent(num_agents=num_agents, obs_dim=obs_dim, action_dim=action_dim, training=True)
+        agent = MADRLAgent(num_agents=num_agents, obs_dim=obs_dim, action_dim=action_dim, training=False)
         agent.load_models(model_checkpoint)
         print(f"✓ Loaded model from {model_checkpoint}")
 
@@ -1344,7 +1369,6 @@ def main():
         env, 
         agent,
         enable_profiling=args.profile,
-        log_interval=args.profile_interval
     )
     
     # Run

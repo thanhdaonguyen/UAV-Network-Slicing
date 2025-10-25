@@ -133,9 +133,9 @@ behavior:
 
 # Reward function weights
 reward_weights:
-    qos: 3.0 # QoS satisfaction weight
-    energy: 0.3          # Energy efficiency weight
-    fairness: 2.0 # Fairness weight
+    qos: 2.0 # QoS satisfaction weight
+    energy: 0.8 # Energy efficiency weight
+    fairness: 0.5 # Fairness weight
 
 # Energy consumption models
 energy_models:

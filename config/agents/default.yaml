@@ -36,7 +36,7 @@ exploration:
   noise_type: "gaussian"          # "gaussian", "ou", "parameter"
   
   # Gaussian noise
-  gaussian_init: 1
+  gaussian_init: 0.5
   gaussian_decay: 0.981
   gaussian_min: 0.005
   
