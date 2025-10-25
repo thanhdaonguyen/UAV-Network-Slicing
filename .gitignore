@@ -26,7 +26,7 @@ training_progress/
 checkpoints/
 baseline_results/
 
-*.png
+# *.png
 *.jpg
 *.jpeg
 
