@@ -1707,7 +1707,7 @@ def main():
     parser = argparse.ArgumentParser(description='Compare baseline agents')
     parser.add_argument('--env_config', type=str, default='config/environment/default.yaml',
                        help='Path to environment config')
-    parser.add_argument('--checkpoint', type=str, default='saved_models_p2/model29/checkpoints/checkpoint_step_390000.pth',
+    parser.add_argument('--checkpoint', type=str, default='saved_models/model2/checkpoints/checkpoint_step_200000.pth',
                        help='Path to trained MADRL model checkpoint')
     parser.add_argument('--steps', type=int, default=2000,
                        help='Number of steps for evaluation')
@@ -1746,28 +1746,27 @@ def main():
     agents = []
     
     # Random Agent
-    # random_agent = RandomAgent(num_agents, obs_dim, action_dim)
-    # agents.append((random_agent, "Random"))
-
+    random_agent = RandomAgent(num_agents, obs_dim, action_dim)
+    agents.append((random_agent, "Random"))
 
     # # Additional Baseline Agents
     # smart_greedy_agent = SmartGreedyAgent(num_agents, obs_dim, action_dim, env)
     # agents.append((smart_greedy_agent, "Smart Greedy"))
 
-    # qos_greedy_agent = QoSAwareHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # # agents.append((qos_greedy_agent, "QoS-Aware Greedy"))
+    qos_greedy_agent = QoSAwareHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    agents.append((qos_greedy_agent, "QoS-Aware Greedy"))
 
     # energy_aware_agent = EnergyAwareGreedyAgent(num_agents, obs_dim, action_dim, env)
     # agents.append((energy_aware_agent, "Energy-Aware Greedy"))
 
-    # dynamic_height_agent = DynamicHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((dynamic_height_agent, "Dynamic Height Greedy"))
+    dynamic_height_agent = DynamicHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    agents.append((dynamic_height_agent, "Dynamic Height Greedy"))
 
-    # coverage_greedy_agent = CoverageMaximizationGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((coverage_greedy_agent, "Coverage Greedy"))
+    coverage_greedy_agent = CoverageMaximizationGreedyAgent(num_agents, obs_dim, action_dim, env)
+    agents.append((coverage_greedy_agent, "Coverage Greedy"))
 
-    # adaptive_height_agent = AdaptiveHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((adaptive_height_agent, "Adaptive Height Greedy"))
+    adaptive_height_agent = AdaptiveHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    agents.append((adaptive_height_agent, "Adaptive Height Greedy"))
 
     # 3. Trained MADRL Agent (if checkpoint provided)
     if args.checkpoint:
@@ -1778,7 +1777,7 @@ def main():
             training=False
         )
         trained_agent.load_models(args.checkpoint)
-        agents.append((trained_agent, "MADRL (Model 29)"))
+        agents.append((trained_agent, "MADRL (Trained)"))
         print(f"✓ Loaded trained model from {args.checkpoint}\n")
 
     # Another trained agent
@@ -1792,25 +1791,25 @@ def main():
     # agents.append((agent2, "MADRL (Model 46)"))
     
     # Evaluate all agents on the same environment
-    # results_list = []
-    # for agent, agent_name in agents:
-    #     # Reset environment with same seed for fair comparison
-    #     np.random.seed(args.seed)
+    results_list = []
+    for agent, agent_name in agents:
+        # Reset environment with same seed for fair comparison
+        np.random.seed(args.seed)
         
-    #     results = evaluator.evaluate_agent(
-    #         agent, 
-    #         agent_name,
-    #         env=env,
-    #         max_steps=args.steps
-    #     )
-    #     results_list.append(results)
+        results = evaluator.evaluate_agent(
+            agent, 
+            agent_name,
+            env=env,
+            max_steps=args.steps
+        )
+        results_list.append(results)
     
     # # Save results
-    # evaluator.save_results(results_list)
+    evaluator.save_results(results_list)
 
     # Generate comparison plots
-    # evaluator.compare_agents(evaluator.run_dir)
-    evaluator.compare_agents("baseline_results/run_20251025_171841")
+    evaluator.compare_agents(evaluator.run_dir)
+    # evaluator.compare_agents("baseline_results/run_20251025_171841")
     
 
     

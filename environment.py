@@ -560,7 +560,6 @@ class NetworkSlicingEnv:
             v_factor = self.energy_models.get('vertical_energy_factor')
             movement_energy = h_factor * (v_x**2 + v_y**2) * self.T_L + v_factor * (v_z**2) * self.T_L
             
-            
             uav.position = new_pos
             
             # Power update

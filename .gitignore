@@ -3,7 +3,7 @@ saved_models/
 saved_models_p1/
 saved_models_p2/
 
-*.pth
+# *.pth
 *.pkl
 *.h5
 
@@ -23,7 +23,7 @@ baseline_results_p1/
 
 # Training artifacts
 training_progress/
-checkpoints/
+# checkpoints/
 baseline_results/
 
 # *.png
