@@ -414,7 +414,8 @@ class TrainingManager:
                 )
                 if self.MADRLagent.exploration_noise == 0.01 and self.exploration_num == 1:
                     self.MADRLagent.exploration_noise = self.MADRLagent.re_exploration_noise
-        
+                    self.exploration_num += 1
+
         # Cleanup
         if self.visualizer is not None:
             self._cleanup_visualizer()
