@@ -395,13 +395,13 @@ class TrainingManager:
             observations = next_observations
             
             # Periodic operations
-            # if (step + 1) % self.config['save_interval'] == 0 and step > 0:
-            if (step + 1) % 1000 == 0 and step > 0:
+            if (step + 1) % self.config['save_interval'] == 0 and step > 0:
+            # if (step + 1) % 1000 == 0 and step > 0:
                 self._save_checkpoint(step + 1)
                 self._save_metrics_to_csv()
             
-            # if (step + 1) % self.config['plot_interval'] == 0 and step > 0:
-            if (step + 1) % 1000 == 0 and step > 0:
+            if (step + 1) % self.config['plot_interval'] == 0 and step > 0:
+            # if (step + 1) % 1000 == 0 and step > 0:
 
                 
                 self._plot_training_progress(step + 1)
