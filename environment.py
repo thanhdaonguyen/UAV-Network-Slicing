@@ -7,7 +7,8 @@ from numba import jit, prange
 import heapq
 from collections import defaultdict
 
-
+global_env_config = Configuration("config/environment/default.yaml")
+global_beam_angle = global_env_config.uav_params['beam_angle']
 
 class HandoverTracker:
     '''Track handovers and calculate penalties'''
@@ -94,6 +95,8 @@ class UAV:
     beam_direction: np.ndarray = None  # NEW: Beam pointing direction (default: straight down)
     avg_queuing_delay_ms: float = 0.0  # NEW: Average queuing delay at the UAV
     avg_drop_rate: float = 0.0  # NEW: Average packet drop rate at the UAV
+    movement_energy: float = 0.0  # NEW: Cumulative movement energy used
+    communication_energy: float = 0.0  # NEW: Cumulative communication energy used
 
     def __post_init__(self):
         if self.RBs is None:
@@ -198,7 +201,7 @@ def calculate_sinr_batch_numba(ue_positions, rb_frequencies, uav_positions,
                 signal_power = rx_power
             else:
                 angle_to_ue = np.arccos(-dz / distance) * (180.0 / 3.141592653589793)  # in degrees
-                if angle_to_ue <= 60.0:  # Assuming beam angle of 60 degrees
+                if angle_to_ue <= global_beam_angle:  
                     interference_power += rx_power
 
         sinr = signal_power / (interference_power + noise_power)
@@ -861,17 +864,18 @@ class NetworkSlicingEnv:
 
         for ue_id, ue in self.ues.items():
             if not ue.is_active:
+                ue.traffic_pattern = None
                 continue
 
-            if ue.assigned_uav is None: # UE not assigned to any UAV
+            elif ue.assigned_uav is None: # UE not assigned to any UAV
                 ue.traffic_pattern = [0 for _ in range(int(self.T_L))]
                 continue
+
+            elif ue.traffic_pattern is not None:
+                continue  # Already has a traffic pattern
             
             avg_arrival_rate = self.traffic_patterns[ue.slice_type]['avg_arrival_rate']
-            ue_traffic_pattern = []
-            for _ in range(int(self.T_L)):
-                ue_traffic_pattern.append(np.random.poisson(avg_arrival_rate))
-            ue.traffic_pattern = ue_traffic_pattern
+            ue.traffic_pattern = [np.random.poisson(avg_arrival_rate) for _ in range(int(self.T_L))]
 
     def _handle_arrivals(self):
         """Separate function for handling arrivals (cleaner code)"""

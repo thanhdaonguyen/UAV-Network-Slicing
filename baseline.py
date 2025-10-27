@@ -58,9 +58,8 @@ class RandomAgent(BaselineAgent):
             
             # Position changes: random but reasonable [-1, 1]
             action[0:3] = np.random.uniform(-1, 1, 3)
-            
-            # Power: random but not too low (minimum 20% power to avoid SINR issues)
-            action[3] = np.random.uniform(0.2, 1.0)
+            # Power: random but not too low (minimum 0% power to avoid SINR issues)
+            action[3] = np.random.uniform(0, 1.0)
             
             # Bandwidth allocations: random positive values
             if self.action_dim > 4:
@@ -158,166 +157,6 @@ class GreedyAgent(BaselineAgent):
 # ============================================================================
 # ENHANCED GREEDY VARIANTS
 # ============================================================================
-
-class SmartGreedyAgent(BaselineAgent):
-    """
-    Smart Greedy: Multi-factor decision making with QoS awareness
-    - Position: Weighted centroid considering slice priority and satisfaction
-    - Power: Adaptive based on demand, battery, and distance
-    - Bandwidth: Multi-factor scoring (users, slice weight, distance, urgency)
-    """
-    
-    def __init__(self, num_agents: int, obs_dim: int, action_dim: int, env):
-        super().__init__(num_agents, obs_dim, action_dim)
-        self.env = env
-        self.position_aggressiveness = 0.4
-        self.power_min_ratio = 0.4
-        self.power_safety_margin = 0.15
-    
-    def select_actions(self, observations: Dict[int, np.ndarray], explore: bool = False) -> Dict[int, np.ndarray]:
-        actions = {}
-        
-        for uav_id, obs in observations.items():
-            action = np.zeros(self.action_dim)
-            uav = self.env.uavs[uav_id]
-            
-            # 1. Smart Positioning: Weighted centroid with QoS awareness
-            position_action = self._compute_smart_position(uav)
-            action[0:3] = position_action
-            
-            # 2. Adaptive Power: Based on demand, distance, and battery
-            power_action = self._compute_adaptive_power(uav)
-            action[3] = power_action
-            
-            # 3. Intelligent Bandwidth: Multi-factor scoring
-            bandwidth_actions = self._compute_intelligent_bandwidth(uav)
-            action[4:] = bandwidth_actions
-            
-            actions[uav_id] = action
-        
-        return actions
-    
-    def _compute_smart_position(self, uav) -> np.ndarray:
-        """Position based on weighted centroid of priority users"""
-        assigned_ues = [ue for ue in self.env.ues.values() 
-                       if ue.assigned_uav == uav.id and ue.is_active]
-        
-        if not assigned_ues:
-            return np.zeros(3)
-        
-        weighted_positions = []
-        total_weight = 0.0
-        
-        for ue in assigned_ues:
-            # Factor 1: Slice priority
-            slice_weight = self.env.slice_weights[ue.slice_type]
-            
-            # Factor 2: Distance urgency (closer users get higher weight)
-            distance = np.linalg.norm(ue.position - uav.position)
-            distance_weight = 1.0 / (distance + 20.0)
-            
-            # Factor 3: Satisfaction urgency (underserved users)
-            num_rbs = len(ue.assigned_rb) if ue.assigned_rb else 0
-            satisfaction_urgency = 2.0 if num_rbs < 2 else 1.0
-            
-            combined_weight = slice_weight * distance_weight * satisfaction_urgency
-            weighted_positions.append(ue.position * combined_weight)
-            total_weight += combined_weight
-        
-        if total_weight > 0:
-            target = sum(weighted_positions) / total_weight
-            direction = target - uav.position
-            distance_to_target = np.linalg.norm(direction)
-            
-            if distance_to_target > 5.0:
-                direction = (direction / distance_to_target) * self.position_aggressiveness
-                return np.clip(direction, -1.0, 1.0)
-        
-        return np.zeros(3)
-    
-    def _compute_adaptive_power(self, uav) -> float:
-        """Power allocation considering demand, distance, and battery"""
-        assigned_ues = [ue for ue in self.env.ues.values() 
-                       if ue.assigned_uav == uav.id and ue.is_active]
-        
-        if not assigned_ues:
-            return self.power_min_ratio
-        
-        # Factor 1: Demand intensity
-        num_users = len(assigned_ues)
-        demand_factor = min(num_users / 20.0, 1.0)
-        
-        # Factor 2: Average distance to users
-        avg_distance = np.mean([np.linalg.norm(ue.position - uav.position) 
-                               for ue in assigned_ues])
-        distance_factor = np.clip(avg_distance / 400.0, 0.5, 1.0)
-        
-        # Factor 3: Slice priority mix
-        slice_priorities = [self.env.slice_weights[ue.slice_type] for ue in assigned_ues]
-        avg_priority = np.mean(slice_priorities)
-        
-        # Factor 4: Battery constraint
-        battery_ratio = uav.current_battery / uav.battery_capacity
-        if battery_ratio < 0.3:
-            battery_factor = 0.6
-        elif battery_ratio < 0.5:
-            battery_factor = 0.8
-        else:
-            battery_factor = 1.0
-        
-        # Combine factors
-        target_power = self.power_min_ratio + \
-                      (1.0 - self.power_min_ratio) * demand_factor * distance_factor * \
-                      avg_priority * battery_factor
-        
-        return np.clip(target_power, self.power_min_ratio, 1.0 - self.power_safety_margin)
-    
-    def _compute_intelligent_bandwidth(self, uav) -> np.ndarray:
-        """Bandwidth allocation with multi-factor scoring"""
-        uav_das = [da for da in self.env.demand_areas.values() if da.uav_id == uav.id]
-        
-        if not uav_das:
-            num_das = self.action_dim - 4
-            return np.ones(num_das) / num_das
-        
-        priorities = []
-        for da in sorted(uav_das, key=lambda d: d.id):
-            if len(da.user_ids) == 0:
-                priorities.append(0.01)
-                continue
-            
-            # Factor 1: Number of users
-            num_users = len(da.user_ids)
-            
-            # Factor 2: Slice priority
-            slice_priority = self.env.slice_weights[da.slice_type]
-            
-            # Factor 3: Distance penalty (farther needs more resources)
-            distance_multiplier = {'Near': 1.0, 'Medium': 1.4, 'Far': 1.8}[da.distance_level]
-            
-            # Factor 4: Satisfaction urgency
-            avg_rbs = len(da.RB_ids_list) / max(1, len(da.user_ids))
-            urgency = 2.0 if avg_rbs < 1.5 else (1.5 if avg_rbs < 3.0 else 1.0)
-            
-            priority = num_users * slice_priority * distance_multiplier * urgency
-            priorities.append(priority)
-        
-        # Normalize
-        total_priority = sum(priorities)
-        if total_priority > 0:
-            allocations = np.array(priorities) / total_priority
-        else:
-            allocations = np.ones(len(priorities)) / len(priorities)
-        
-        # Apply minimum allocation for non-empty DAs
-        for i, da in enumerate(sorted(uav_das, key=lambda d: d.id)):
-            if len(da.user_ids) > 0:
-                allocations[i] = max(allocations[i], 0.03)
-        
-        # Re-normalize
-        allocations /= allocations.sum()
-        
-        return allocations
 
 class MaxMinFairnessGreedyAgent(BaselineAgent):
     """
@@ -914,13 +753,11 @@ class CoverageMaximizationGreedyAgent(BaselineAgent):
         # Higher altitude needs more power
         height_ratio = (target_height - self.env.uav_fly_range_h[0]) / \
                       (self.env.uav_fly_range_h[1] - self.env.uav_fly_range_h[0])
+
+        base_power = np.sin(height_ratio * np.pi / 2)  # Between 0.4 and 1.0
+
         
-        base_power = 0.7 + 0.2 * height_ratio
-        
-        battery_ratio = uav.current_battery / uav.battery_capacity
-        battery_penalty = 0.7 if battery_ratio < 0.3 else 1.0
-        
-        return np.clip(base_power * battery_penalty, 0.5, 0.95)
+        return np.clip(base_power, 0, 1)
     
     def _compute_coverage_bandwidth(self, uav) -> np.ndarray:
         """Prioritize users that are harder to cover (Far distance)"""
@@ -1700,6 +1537,103 @@ class EvaluationFramework:
             
             print(f"Saved detailed metrics to {csv_path}")
 
+class AdaptiveMultiObjectiveGreedy:
+    """
+    Ultimate greedy baseline that optimizes for QoS, energy, and fairness
+    in a single decision framework with adaptive weighting
+    """
+    
+    def select_actions(self, observation):
+        # Parse observation
+        uav_state = observation[:5]  # position, power, battery
+        da_info = observation[5:68].reshape(9, 7)  # 9 DAs x 7 features
+        handover_state = observation[68:72]
+        surrounding = observation[72:80]
+        
+        # Extract critical metrics per DA
+        queues = da_info[:, 0]  # Queue lengths
+        delays = da_info[:, 1]  # Delays
+        throughputs = da_info[:, 2]  # Throughput
+        qos_satisfaction = da_info[:, 3]  # Current QoS
+        loads = da_info[:, 4]  # Load
+        da_positions = da_info[:, 5:7]  # DA positions
+        
+        # 1. MOVEMENT: Move toward most critical DA
+        # Criticality score combines QoS violation + queue + delay
+        qos_violations = 1.0 - qos_satisfaction  # Higher = worse
+        normalized_queues = queues / (queues.max() + 1e-6)
+        normalized_delays = delays / (delays.max() + 1e-6)
+        
+        criticality = (0.5 * qos_violations + 
+                      0.3 * normalized_queues + 
+                      0.2 * normalized_delays)
+        
+        most_critical_da = np.argmax(criticality)
+        target_position = da_positions[most_critical_da]
+        
+        # Calculate direction to most critical DA
+        current_pos = uav_state[:2]
+        direction = target_position - current_pos
+        distance = np.linalg.norm(direction)
+        
+        # Adaptive movement: faster toward critical, slower when close
+        if distance > 0:
+            movement = direction / distance  # Normalize
+            speed_factor = min(1.0, distance / 50.0)  # Slow down when close
+            movement = movement * speed_factor
+        else:
+            movement = np.array([0.0, 0.0])
+        
+        # Height adjustment based on coverage needs
+        if criticality.max() > 0.5:  # High criticality
+            altitude = 0.3  # Lower for better signal
+        else:
+            altitude = 0.0  # Medium height
+        
+        position_action = np.array([movement[0], movement[1], altitude])
+        
+        # 2. POWER: Adaptive based on demand and battery
+        battery_level = uav_state[4]
+        avg_qos = qos_satisfaction.mean()
+        
+        if battery_level < 0.3:  # Low battery - conserve
+            power = 0.3
+        elif avg_qos < 0.6:  # Poor QoS - boost power
+            power = 0.9
+        elif criticality.max() > 0.7:  # Critical DA exists
+            power = 0.8
+        else:  # Normal operation
+            power = 0.6
+        
+        power_action = np.array([power])
+        
+        # 3. BANDWIDTH: Proportional to weighted demand with fairness
+        # Demand score combines multiple factors
+        demand_scores = (
+            0.4 * normalized_queues +  # Queue pressure
+            0.3 * qos_violations +      # QoS violations
+            0.2 * normalized_delays +   # Delay issues
+            0.1 * (loads / (loads.max() + 1e-6))  # Current load
+        )
+        
+        # Apply fairness: ensure minimum allocation
+        min_allocation = 0.05  # 5% minimum per DA
+        available_bandwidth = 1.0 - (9 * min_allocation)
+        
+        # Distribute available bandwidth proportionally to demand
+        if demand_scores.sum() > 0:
+            proportional_allocation = (demand_scores / demand_scores.sum()) * available_bandwidth
+            bandwidth = proportional_allocation + min_allocation
+        else:
+            bandwidth = np.ones(9) / 9  # Equal if no demand info
+        
+        # Ensure normalization
+        bandwidth = bandwidth / bandwidth.sum()
+        
+        # Combine all actions
+        action = np.concatenate([position_action, power_action, bandwidth])
+        
+        return action
 
 def main():
     import argparse
@@ -1707,7 +1641,7 @@ def main():
     parser = argparse.ArgumentParser(description='Compare baseline agents')
     parser.add_argument('--env_config', type=str, default='config/environment/default.yaml',
                        help='Path to environment config')
-    parser.add_argument('--checkpoint', type=str, default='saved_models/model2/checkpoints/checkpoint_step_200000.pth',
+    parser.add_argument('--checkpoint', type=str, default='saved_models/model6/checkpoints/checkpoint_step_190000.pth',
                        help='Path to trained MADRL model checkpoint')
     parser.add_argument('--steps', type=int, default=2000,
                        help='Number of steps for evaluation')
@@ -1746,27 +1680,27 @@ def main():
     agents = []
     
     # Random Agent
-    random_agent = RandomAgent(num_agents, obs_dim, action_dim)
-    agents.append((random_agent, "Random"))
+    # random_agent = RandomAgent(num_agents, obs_dim, action_dim)
+    # agents.append((random_agent, "Random"))
 
     # # Additional Baseline Agents
     # smart_greedy_agent = SmartGreedyAgent(num_agents, obs_dim, action_dim, env)
     # agents.append((smart_greedy_agent, "Smart Greedy"))
 
-    qos_greedy_agent = QoSAwareHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    agents.append((qos_greedy_agent, "QoS-Aware Greedy"))
+    # qos_greedy_agent = QoSAwareHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    # agents.append((qos_greedy_agent, "QoS-Aware Greedy"))
 
     # energy_aware_agent = EnergyAwareGreedyAgent(num_agents, obs_dim, action_dim, env)
     # agents.append((energy_aware_agent, "Energy-Aware Greedy"))
 
-    dynamic_height_agent = DynamicHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    agents.append((dynamic_height_agent, "Dynamic Height Greedy"))
+    # dynamic_height_agent = DynamicHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    # agents.append((dynamic_height_agent, "Dynamic Height Greedy"))
 
     coverage_greedy_agent = CoverageMaximizationGreedyAgent(num_agents, obs_dim, action_dim, env)
     agents.append((coverage_greedy_agent, "Coverage Greedy"))
 
-    adaptive_height_agent = AdaptiveHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    agents.append((adaptive_height_agent, "Adaptive Height Greedy"))
+    # adaptive_height_agent = AdaptiveHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    # agents.append((adaptive_height_agent, "Adaptive Height Greedy"))
 
     # 3. Trained MADRL Agent (if checkpoint provided)
     if args.checkpoint:
@@ -1777,19 +1711,19 @@ def main():
             training=False
         )
         trained_agent.load_models(args.checkpoint)
-        agents.append((trained_agent, "MADRL (Trained)"))
+        # agents.append((trained_agent, "MADRL (Trained)"))
         print(f"✓ Loaded trained model from {args.checkpoint}\n")
 
     # Another trained agent
-    # agent2 = MADRLAgent(
-    #         num_agents=num_agents,
-    #         obs_dim=obs_dim,
-    #         action_dim=action_dim,
-    #         training=False
-    #     )
-    # agent2.load_models('saved_models/model46/checkpoints/checkpoint_step_410000.pth')
-    # agents.append((agent2, "MADRL (Model 46)"))
-    
+    agent2 = MADRLAgent(
+            num_agents=num_agents,
+            obs_dim=obs_dim,
+            action_dim=action_dim,
+            training=False
+        )
+    agent2.load_models('saved_models/model6/checkpoints/checkpoint_step_320000.pth')
+    # agents.append((agent2, "MADRL (Model 6)"))
+
     # Evaluate all agents on the same environment
     results_list = []
     for agent, agent_name in agents:

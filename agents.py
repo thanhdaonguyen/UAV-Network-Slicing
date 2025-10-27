@@ -457,6 +457,7 @@ class MADRLAgent:
         # Exploration parameters
         
         self.exploration_noise = self.config.exploration.gaussian_init
+        self.re_exploration_noise = self.config.exploration.gaussian_2nd
         self.noise_decay = self.config.exploration.gaussian_decay
         self.min_noise = self.config.exploration.gaussian_min
         if not training:
@@ -811,6 +812,46 @@ class MADRLAgent:
         
         self.exploration_noise = checkpoint['exploration_noise']
         print(f"Models loaded from {path}")
+
+    # def load_models(self, path: str, use_averaged_actors: bool = True):
+    #     """Load all models, optionally using averaged actor parameters"""
+    #     checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        
+    #     self.critic.load_state_dict(checkpoint['critic'])
+    #     self.critic_target.load_state_dict(checkpoint['critic_target'])
+    #     self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer'])
+        
+    #     if use_averaged_actors:
+    #         # Create averaged actor state dict
+    #         averaged_actor_state = {}
+    #         actor_state_dicts = checkpoint['actors']
+            
+    #         for key in actor_state_dicts[0].keys():
+    #             # Stack and average parameters
+    #             stacked_params = torch.stack([
+    #                 actor_state_dicts[i][key] 
+    #                 for i in range(len(actor_state_dicts))
+    #             ])
+    #             averaged_actor_state[key] = torch.mean(stacked_params, dim=0)
+            
+    #         # Load averaged parameters into ALL actors
+    #         for i in range(self.num_agents):
+    #             self.actors[i].load_state_dict(averaged_actor_state)
+    #             self.actor_targets[i].load_state_dict(averaged_actor_state)
+            
+    #         print(f"All actors loaded with averaged parameters from {len(actor_state_dicts)} agents")
+    #     else:
+    #         # Load individual actor parameters
+    #         for i in range(self.num_agents):
+    #             self.actors[i].load_state_dict(checkpoint['actors'][i])
+    #             self.actor_targets[i].load_state_dict(checkpoint['actor_targets'][i])
+        
+    #     # Load optimizers (always individual)
+    #     for i in range(self.num_agents):
+    #         self.actor_optimizers[i].load_state_dict(checkpoint['actor_optimizers'][i])
+        
+    #     self.exploration_noise = checkpoint['exploration_noise']
+    #     print(f"Models loaded from {path}")
 
     def reset_optimizer_state(self):
         """Reset Adam's momentum when switching from BC to RL"""

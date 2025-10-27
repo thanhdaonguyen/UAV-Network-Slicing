@@ -131,6 +131,7 @@ class TrainingManager:
             action_dim=action_dim,
             env=self.env
         )
+        self.exploration_num = 1
 
         # Save config files
         self._save_config_files()
@@ -394,12 +395,14 @@ class TrainingManager:
             observations = next_observations
             
             # Periodic operations
-            if (step + 1) % self.config['save_interval'] == 0 and step > 0:
+            # if (step + 1) % self.config['save_interval'] == 0 and step > 0:
+            if (step + 1) % 1000 == 0 and step > 0:
                 self._save_checkpoint(step + 1)
                 self._save_metrics_to_csv()
             
-            if (step + 1) % self.config['plot_interval'] == 0 and step > 0:
-            # if (step + 1) % 2000 == 0 and step > 0:
+            # if (step + 1) % self.config['plot_interval'] == 0 and step > 0:
+            if (step + 1) % 1000 == 0 and step > 0:
+
                 
                 self._plot_training_progress(step + 1)
             
@@ -409,6 +412,8 @@ class TrainingManager:
                     self.MADRLagent.min_noise,
                     self.MADRLagent.exploration_noise * self.MADRLagent.noise_decay
                 )
+                if self.MADRLagent.exploration_noise == 0.01 and self.exploration_num == 1:
+                    self.MADRLagent.exploration_noise = self.MADRLagent.re_exploration_noise
         
         # Cleanup
         if self.visualizer is not None:
@@ -428,6 +433,15 @@ class TrainingManager:
         self.step_metrics['avg_reliability_sat'].append(self.env.stats.get('avg_reliability_sat', 0))
         self.step_metrics['handovers'].append(self.env.stats.get('handovers', 0))
 
+        if f'movement_energy' not in self.step_metrics:
+                self.step_metrics[f'movement_energy'] = []
+                self.step_metrics[f'transmission_energy'] = []
+        movement_energy = np.mean([uav.energy_used['movement'] for uav in self.env.uavs.values()])
+        transmission_energy = np.mean([uav.energy_used['transmission'] for uav in self.env.uavs.values()])
+        self.step_metrics[f'movement_energy'].append(movement_energy)
+        self.step_metrics[f'transmission_energy'].append(transmission_energy)
+
+
         # Store actions of each agent for analysis if needed
         for i, action in actions.items():
             self.step_metrics[f'agent_{i}_pos_x'].append(action[0])
@@ -443,7 +457,7 @@ class TrainingManager:
         import pandas as pd
         import os
         
-        fig, axes = plt.subplots(4, 4, figsize=(20, 16))
+        fig, axes = plt.subplots(4, 5, figsize=(20, 12))
         fig.suptitle(f'Training Progress - Step {current_step}', fontsize=16)
         
         # Read data from CSV files
@@ -512,78 +526,78 @@ class TrainingManager:
         if training_df is not None and 'actor_losses' in training_df.columns:
             training_steps = training_df['steps'].values
             actor_losses = training_df['actor_losses'].values
-            axes[1, 0].plot(training_steps, actor_losses, 
+            axes[0, 4].plot(training_steps, actor_losses, 
                         'red', alpha=0.6, marker='o', markersize=3)
-            axes[1, 0].set_title('Actor Losses')
-            axes[1, 0].set_xlabel('Steps')
-            axes[1, 0].set_ylabel('Loss')
-            axes[1, 0].grid(True)
+            axes[0, 4].set_title('Actor Losses')
+            axes[0, 4].set_xlabel('Steps')
+            axes[0, 4].set_ylabel('Loss')
+            axes[0, 4].grid(True)
         
         # Plot 6: Critic losses (only where training occurred)
         if training_df is not None and 'critic_losses' in training_df.columns:
             training_steps = training_df['steps'].values
             critic_losses = training_df['critic_losses'].values
-            axes[1, 1].plot(training_steps, critic_losses, 
+            axes[1, 0].plot(training_steps, critic_losses, 
                         'blue', alpha=0.6, marker='o', markersize=3)
-            axes[1, 1].set_title('Critic Losses')
-            axes[1, 1].set_xlabel('Steps')
-            axes[1, 1].set_ylabel('Loss')
-            axes[1, 1].grid(True)
+            axes[1, 0].set_title('Critic Losses')
+            axes[1, 0].set_xlabel('Steps')
+            axes[1, 0].set_ylabel('Loss')
+            axes[1, 0].grid(True)
 
         # Plot 7: Fairness Level
         fairness_level = step_df['fairness_level'].values
-        axes[1, 2].plot(steps, fairness_level, 'brown', alpha=0.6)
+        axes[1, 1].plot(steps, fairness_level, 'brown', alpha=0.6)
         if len(steps) > 100:
             smoothed_fairness = self._moving_average(fairness_level, 1000)
-            axes[1, 2].plot(steps[-len(smoothed_fairness):], smoothed_fairness, 'saddlebrown', linewidth=2)
-        axes[1, 2].set_title('Average Fairness Level')
-        axes[1, 2].set_xlabel('Steps')
-        axes[1, 2].set_ylabel('Average Fairness Level')
-        axes[1, 2].grid(True)
+            axes[1, 1].plot(steps[-len(smoothed_fairness):], smoothed_fairness, 'saddlebrown', linewidth=2)
+        axes[1, 1].set_title('Average Fairness Level')
+        axes[1, 1].set_xlabel('Steps')
+        axes[1, 1].set_ylabel('Average Fairness Level')
+        axes[1, 1].grid(True)
 
         # Plot 8: Exploration Noise
         noise = step_df['noise'].values
-        axes[1, 3].plot(steps, noise, 'cyan', alpha=0.6)
-        axes[1, 3].set_title('Exploration Noise')
-        axes[1, 3].set_xlabel('Steps')
-        axes[1, 3].set_ylabel('Noise Level')
-        axes[1, 3].grid(True)
+        axes[1, 2].plot(steps, noise, 'cyan', alpha=0.6)
+        axes[1, 2].set_title('Exploration Noise')
+        axes[1, 2].set_xlabel('Steps')
+        axes[1, 2].set_ylabel('Noise Level')
+        axes[1, 2].grid(True)
 
         # Plot 9: Power usage of agents
         for i in range(self.config['num_uavs']):
             col_name = f'agent_{i}_power'
             if col_name in step_df.columns:
                 agent_power = step_df[col_name].values
-                axes[2, 0].plot(steps, agent_power, alpha=0.6, label=f'Agent {i}')
-        axes[2, 0].set_title('Power Usage of Agents')
-        axes[2, 0].set_xlabel('Steps')
-        axes[2, 0].set_ylabel('Power Usage (Watts)')
-        axes[2, 0].legend(loc='lower left')
-        axes[2, 0].grid(True)
+                axes[1, 3].plot(steps, agent_power, alpha=0.6, label=f'Agent {i}')
+        axes[1, 3].set_title('Power Usage of Agents')
+        axes[1, 3].set_xlabel('Steps')
+        axes[1, 3].set_ylabel('Power Usage (Watts)')
+        axes[1, 3].legend(loc='lower left')
+        axes[1, 3].grid(True)
 
         if hasattr(self, 'training_metrics') and 'bc_weights' in self.training_metrics:
             training_df = pd.read_csv(f'{self.model_dir}/training_metrics.csv')
         
             # Plot 10: BC Weight Schedule (if applicable)
             if 'bc_weights' in training_df.columns:
-                axes[2, 1].plot(
+                axes[1, 4].plot(
                     training_df['steps'], 
                     training_df['bc_weights'], 
                     'purple', 
                     alpha=0.8,
                     linewidth=3
                 )
-                axes[2, 1].set_title('BC Weight Schedule')
-                axes[2, 1].set_xlabel('Steps')
-                axes[2, 1].set_ylabel('BC Weight')
-                axes[2, 1].set_ylim([0, 1])
-                axes[2, 1].grid(True)
+                axes[1, 4].set_title('BC Weight Schedule')
+                axes[1, 4].set_xlabel('Steps')
+                axes[1, 4].set_ylabel('BC Weight')
+                axes[1, 4].set_ylim([0, 1])
+                axes[1, 4].grid(True)
 
             # Plot 11: Plot RL Loss vs BC Loss
             if 'rl_losses' in training_df.columns and 'bc_losses' in training_df.columns:
-                ax_twin = axes[2, 2].twinx()
+                ax_twin = axes[2, 0].twinx()
 
-                line1 = axes[2, 2].plot(
+                line1 = axes[2, 0].plot(
                     training_df['steps'],
                     training_df['rl_losses'],
                     'red', 
@@ -598,66 +612,90 @@ class TrainingManager:
                     label='BC Loss'
                 )
                 
-                axes[2, 2].set_title('RL Loss vs BC Loss')
-                axes[2, 2].set_xlabel('Steps')
-                axes[2, 2].set_ylabel('RL Loss', color='red')
+                axes[2, 0].set_title('RL Loss vs BC Loss')
+                axes[2, 0].set_xlabel('Steps')
+                axes[2, 0].set_ylabel('RL Loss', color='red')
                 ax_twin.set_ylabel('BC Loss', color='blue')
-                axes[2, 2].tick_params(axis='y', labelcolor='red')
+                axes[2, 0].tick_params(axis='y', labelcolor='red')
                 ax_twin.tick_params(axis='y', labelcolor='blue')
                 
                 # Combine legends
                 lines = line1 + line2
                 labels = [l.get_label() for l in lines]
-                axes[2, 2].legend(lines, labels, loc='upper right')
-                axes[2, 2].grid(True)
+                axes[2, 0].legend(lines, labels, loc='upper right')
+                axes[2, 0].grid(True)
 
         # Plot 12: Average Throughput Satisfaction
         if 'avg_throughput_sat' in step_df.columns:
             avg_throughput_sat = step_df['avg_throughput_sat'].values
-            axes[2, 3].plot(steps, avg_throughput_sat, 'magenta', alpha=0.6)
+            axes[2, 1].plot(steps, avg_throughput_sat, 'magenta', alpha=0.6)
             if len(steps) > 100:
                 smoothed_throughput = self._moving_average(avg_throughput_sat, 1000)
-                axes[2, 3].plot(steps[-len(smoothed_throughput):], smoothed_throughput, 'darkmagenta', linewidth=2)
-            axes[2, 3].set_title('Average Throughput Satisfaction')
-            axes[2, 3].set_xlabel('Steps')
-            axes[2, 3].set_ylabel('Throughput Satisfaction')
-            axes[2, 3].grid(True)
+                axes[2, 1].plot(steps[-len(smoothed_throughput):], smoothed_throughput, 'darkmagenta', linewidth=2)
+            axes[2, 1].set_title('Average Throughput Satisfaction')
+            axes[2, 1].set_xlabel('Steps')
+            axes[2, 1].set_ylabel('Throughput Satisfaction')
+            axes[2, 1].grid(True)
 
         # Plot 13: Average Delay Satisfaction
         if 'avg_delay_sat' in step_df.columns:
             avg_delay_sat = step_df['avg_delay_sat'].values
-            axes[3, 0].plot(steps, avg_delay_sat, 'teal', alpha=0.6)
+            axes[2, 2].plot(steps, avg_delay_sat, 'teal', alpha=0.6)
             if len(steps) > 100:
                 smoothed_delay = self._moving_average(avg_delay_sat, 1000)
-                axes[3, 0].plot(steps[-len(smoothed_delay):], smoothed_delay, 'darkcyan', linewidth=2)
-            axes[3, 0].set_title('Average Delay Satisfaction')
-            axes[3, 0].set_xlabel('Steps')
-            axes[3, 0].set_ylabel('Delay Satisfaction')
-            axes[3, 0].grid(True)
+                axes[2, 2].plot(steps[-len(smoothed_delay):], smoothed_delay, 'darkcyan', linewidth=2)
+            axes[2, 2].set_title('Average Delay Satisfaction')
+            axes[2, 2].set_xlabel('Steps')
+            axes[2, 2].set_ylabel('Delay Satisfaction')
+            axes[2, 2].grid(True)
         
         # Plot 14: Average Reliability Satisfaction
         if 'avg_reliability_sat' in step_df.columns:
             avg_reliability_sat = step_df['avg_reliability_sat'].values
-            axes[3, 1].plot(steps, avg_reliability_sat, 'olive', alpha=0.6)
+            axes[2, 3].plot(steps, avg_reliability_sat, 'olive', alpha=0.6)
             if len(steps) > 100:
                 smoothed_reliability = self._moving_average(avg_reliability_sat, 1000)
-                axes[3, 1].plot(steps[-len(smoothed_reliability):], smoothed_reliability, 'darkolivegreen', linewidth=2)
-            axes[3, 1].set_title('Average Reliability Satisfaction')
-            axes[3, 1].set_xlabel('Steps')
-            axes[3, 1].set_ylabel('Reliability Satisfaction')
-            axes[3, 1].grid(True)
+                axes[2, 3].plot(steps[-len(smoothed_reliability):], smoothed_reliability, 'darkolivegreen', linewidth=2)
+            axes[2, 3].set_title('Average Reliability Satisfaction')
+            axes[2, 3].set_xlabel('Steps')
+            axes[2, 3].set_ylabel('Reliability Satisfaction')
+            axes[2, 3].grid(True)
 
         # Plot 15: Handovers
         if 'handovers' in step_df.columns:
             handovers = step_df['handovers'].values
-            axes[3, 2].plot(steps, handovers, 'sienna', alpha=0.6)
+            axes[2, 4].plot(steps, handovers, 'sienna', alpha=0.6)
             if len(steps) > 100:
                 smoothed_handovers = self._moving_average(handovers, 1000)
-                axes[3, 2].plot(steps[-len(smoothed_handovers):], smoothed_handovers, 'peru', linewidth=2)
-            axes[3, 2].set_title('Number of Handovers')
-            axes[3, 2].set_xlabel('Steps')
-            axes[3, 2].set_ylabel('Handovers')
-            axes[3, 2].grid(True)
+                axes[2, 4].plot(steps[-len(smoothed_handovers):], smoothed_handovers, 'peru', linewidth=2)
+            axes[2, 4].set_title('Number of Handovers')
+            axes[2, 4].set_xlabel('Steps')
+            axes[2, 4].set_ylabel('Handovers')
+            axes[2, 4].grid(True)
+
+        # Plot 16: Movement Energy
+        if 'movement_energy' in step_df.columns:
+            movement_energy = step_df['movement_energy'].values
+            axes[3, 0].plot(steps, movement_energy, 'navy', alpha=0.6)
+            if len(steps) > 100:
+                smoothed_movement_energy = self._moving_average(movement_energy, 10)
+                axes[3, 0].plot(steps[-len(smoothed_movement_energy):], smoothed_movement_energy, 'midnightblue', linewidth=2)
+            axes[3, 0].set_title('Total Movement Energy')
+            axes[3, 0].set_xlabel('Steps')
+            axes[3, 0].set_ylabel('Energy (Joules)')
+            axes[3, 0].grid(True)
+
+        # Plot 17: Transmission Energy
+        if 'transmission_energy' in step_df.columns:
+            transmission_energy = step_df['transmission_energy'].values
+            axes[3, 1].plot(steps, transmission_energy, 'darkred', alpha=0.6)
+            if len(steps) > 100:
+                smoothed_transmission_energy = self._moving_average(transmission_energy, 10)
+                axes[3, 1].plot(steps[-len(smoothed_transmission_energy):], smoothed_transmission_energy, 'firebrick', linewidth=2)
+            axes[3, 1].set_title('Total Transmission Energy')
+            axes[3, 1].set_xlabel('Steps')
+            axes[3, 1].set_ylabel('Energy (Joules)')
+            axes[3, 1].grid(True)
 
 
         plt.tight_layout()
@@ -897,7 +935,7 @@ def main():
     env_config_file = "config/environment/default.yaml"  # or 'config.json' if you have one
     train_config_file = 'config/train/default.yaml'
     checkpoint_file = None
-    checkpoint_file = "commit_models/model1/checkpoints/checkpoint_step_400000.pth"  # or specify a checkpoint path if resuming training
+    # checkpoint_file = "commit_models/model1/checkpoints/checkpoint_step_400000.pth"  # or specify a checkpoint path if resuming training
     # Run profiling if specified
     if args.profile:
         # Run profiling instead of training
