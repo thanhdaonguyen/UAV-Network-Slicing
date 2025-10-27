@@ -2,7 +2,7 @@
 # -------------------------------------------------------------
 
 # Step-based training configuration
-total_training_steps: 700000    # Total training steps instead of episodes
+total_training_steps: 1000000    # Total training steps instead of episodes
 greedy_experience_gathering_steps: 1000  # Use greedy policy for experience gathering
 
 # BC Regularization

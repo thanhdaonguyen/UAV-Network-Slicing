@@ -1711,7 +1711,7 @@ def main():
             training=False
         )
         trained_agent.load_models(args.checkpoint)
-        # agents.append((trained_agent, "MADRL (Trained)"))
+        agents.append((trained_agent, "MADRL (Trained)"))
         print(f"✓ Loaded trained model from {args.checkpoint}\n")
 
     # Another trained agent
@@ -1721,7 +1721,7 @@ def main():
             action_dim=action_dim,
             training=False
         )
-    agent2.load_models('saved_models/model6/checkpoints/checkpoint_step_320000.pth')
+    agent2.load_models('saved_models/model6/checkpoints/checkpoint_step_372000.pth')
     # agents.append((agent2, "MADRL (Model 6)"))
 
     # Evaluate all agents on the same environment

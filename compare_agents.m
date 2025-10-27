@@ -140,9 +140,9 @@ function fig = compare_agents(results_dir)
         end
     end
     title('Step Rewards', 'FontSize', 12, 'FontWeight', 'bold');
-    xlabel('Step');
-    ylabel('Reward');
-    legend('Location', 'best');
+    xlabel('Step', 'FontWeight', 'bold');
+    ylabel('Reward', 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 11);
     grid on;
     alpha(gca, 0.3);
     hold off;
@@ -155,12 +155,12 @@ function fig = compare_agents(results_dir)
         steps = result.metrics.steps;
         cumulative_rewards = result.metrics.cumulative_rewards;
         plot(steps, cumulative_rewards, 'Color', colors(i,:), ...
-             'LineWidth', 2, 'DisplayName', result.agent_name);
+             'LineWidth', 2.5, 'DisplayName', result.agent_name);
     end
     title('Cumulative Rewards', 'FontSize', 12, 'FontWeight', 'bold');
-    xlabel('Step');
-    ylabel('Cumulative Reward');
-    legend('Location', 'best');
+    xlabel('Step', 'FontWeight', 'bold');
+    ylabel('Cumulative Reward', 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 11);
     grid on;
     alpha(gca, 0.3);
     hold off;
@@ -180,7 +180,7 @@ function fig = compare_agents(results_dir)
         if window > 1
             smoothed = movmean(qos, window);
             plot(steps, smoothed, 'Color', colors(i,:), ...
-                 'LineWidth', 1, 'DisplayName', result.agent_name, 'Marker', standard_markers(i,:), ...
+                 'LineWidth', 1.5, 'DisplayName', result.agent_name, 'Marker', standard_markers(i,:), ...
                  'MarkerSize', 4, 'MarkerIndices', 1:round(length(steps)/10):length(steps));
             % plot(steps, qos, 'Color', [colors(i,:), 0.2], 'LineWidth', 1, ...
             %      'HandleVisibility', 'off');
@@ -190,10 +190,10 @@ function fig = compare_agents(results_dir)
         end
     end
     title('QoS Satisfaction', 'FontSize', 12, 'FontWeight', 'bold');
-    xlabel('Step');
-    ylabel('QoS Satisfaction');
+    xlabel('Step', 'FontWeight', 'bold');
+    ylabel('QoS Satisfaction', 'FontWeight', 'bold');
     ylim([0, 1.05]);
-    legend('Location', 'best');
+    legend('Location', 'best', 'FontSize', 11');
     grid on;
     alpha(gca, 0.3);
     hold off;
@@ -222,10 +222,10 @@ function fig = compare_agents(results_dir)
         end
     end
     title('Energy Consumption Rate', 'FontSize', 12, 'FontWeight', 'bold');
-    xlabel('Step');
+    xlabel('Step', 'FontWeight', 'bold');
     ylabel('Energy Consumption (Lower is Better)');
     ylim([0, 1])
-    legend('Location', 'best');
+    legend('Location', 'best', 'FontSize', 11');
     grid on;
     alpha(gca, 0.3);
     hold off;
@@ -254,10 +254,10 @@ function fig = compare_agents(results_dir)
         end
     end
     title('Fairness Index', 'FontSize', 12, 'FontWeight', 'bold');
-    xlabel('Step');
-    ylabel('Fairness');
+    xlabel('Step', 'FontWeight', 'bold');
+    ylabel('Fairness', 'FontWeight', 'bold');
     ylim([0, 0.8]);
-    legend('Location', 'best');
+    legend('Location', 'best', 'FontSize', 11');
     grid on;
     alpha(gca, 0.3);
     hold off;
@@ -290,19 +290,21 @@ function fig = compare_agents(results_dir)
             'EdgeColor', 'none', 'FaceAlpha', 1, 'DisplayName', result.agent_name);
     end
     
-    ylabel('Normalized Performance');
+    ylabel('Normalized Performance', 'FontWeight', 'bold');
     title('Performance Summary (Normalized)', 'FontSize', 12, 'FontWeight', 'bold');
     set(gca, 'XTick', x);
     set(gca, 'XTickLabel', metrics_names);
     xlim([0.3, 4.7])
     ylim([0, 1.1]);
-    legend('Location', 'best');
+    legend('Location', 'best', 'FontSize', 11');
     grid on;
     alpha(gca, 0.8);
     hold off;
     
     % Save figure
     plot_path = fullfile(results_dir, 'comparison.png');
+    saveas(fig, plot_path);
+    plot_path = fullfile(results_dir, 'comparison.pdf');
     saveas(fig, plot_path);
     fprintf('Saved comparison plot to %s\n', plot_path);
 end
