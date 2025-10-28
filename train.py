@@ -297,6 +297,7 @@ class TrainingManager:
 
     def _get_next_model_dir(self, save_dir):
         """Find the next available model directory name (model1, model2, ...)"""
+        os.makedirs(save_dir, exist_ok=True)
         existing = [d for d in os.listdir(save_dir) if os.path.isdir(os.path.join(save_dir, d))]
         numbers = []
         for name in existing:
