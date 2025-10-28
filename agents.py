@@ -496,7 +496,7 @@ class MADRLAgent:
                 
                 # Power: small Gaussian noise
                 power_noise = np.random.normal(0, self.exploration_noise, size=1)
-                action[3:4] = np.clip(action[3:4] + power_noise, 0, 1)
+                action[3:4] = np.clip(action[3:4] + power_noise, 0.05, 1)
                 
                 # Bandwidth: Dirichlet noise for valid distribution
                 if len(action) > 4:
