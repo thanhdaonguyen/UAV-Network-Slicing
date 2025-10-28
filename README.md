@@ -1,4 +1,4 @@
-# QRL Network Slicing — Training & Simulation
+# MADRL Network Slicing — Training & Simulation
 
 Short project README for the training and simulation codebase used in the QRL Network Slicing experiments.
 

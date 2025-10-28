@@ -9,7 +9,7 @@ import os
 from tqdm import tqdm
 import re
 from utils import Configuration
-from baseline import RandomAgent, GreedyAgent
+from baseline import *
 import cProfile
 import pstats
 from pstats import SortKey
@@ -20,12 +20,15 @@ class TrainingManager:
 
     def __init__(self, env_config_path: str = None, train_config_path: str = None, 
                  checkpoint_path: str = None, enable_visualization: bool = False,
-                 toggle_check_interval: int = 10):
+                 check_interval: int = 10):
         """
+        Control files (create in project directory):
+          - 'viz_on.flag'  : Turn visualization ON
+          - 'viz_off.flag' : Turn visualization OFF
+          - 'quit.flag'    : Quit training gracefully
+        
         Args:
-            toggle_check_interval: Check for toggle every N steps (default: 10)
-                                 Higher = less overhead, less responsive
-                                 Lower = more overhead, more responsive
+            check_interval: Check for control files every N steps
         """
                 # Load configurations using your Configuration class
         env_config = Configuration(env_config_path)
@@ -76,17 +79,12 @@ class TrainingManager:
         # Initialize environment and agent
         self.env = NetworkSlicingEnv(config_path=self.config['env_config_path'])
 
-
-        # Create directories
-        os.makedirs(self.config['save_dir'], exist_ok=True)
-        os.makedirs(self.config['log_dir'], exist_ok=True)
-
-        # Create unique model directory
+        # Create model saving directory
         self.model_dir = self._get_next_model_dir(self.config['save_dir'])
-        os.makedirs(self.model_dir, exist_ok=True)
-        os.makedirs(os.path.join(self.model_dir, 'training_progress'), exist_ok=True)
-        os.makedirs(os.path.join(self.model_dir, 'checkpoints'), exist_ok=True)
-        os.makedirs(os.path.join(self.model_dir, 'uav_throughput'), exist_ok=True)
+        self._create_model_folder()
+
+        # Save config files
+        self._save_config_files()
 
         # Initialize metrics storage
         self._initialize_metrics()
@@ -94,66 +92,97 @@ class TrainingManager:
         # Get observation and action dimensions
         obs_sample = self.env.reset()
         obs_dim = len(list(obs_sample.values())[0])
+        act_dim = 4 + self.config['num_das_per_slice'] * 3  # pos + power + bandwidth per DA
         print(f"Observation dimension: {obs_dim}")
+        print(f"Action dimension: {act_dim}")
 
-        action_dim = 4 + self.config['num_das_per_slice'] * 3  # pos + power + bandwidth per DA
-        
         self.MADRLagent = MADRLAgent(
             num_agents=self.config['num_uavs'],
             obs_dim=obs_dim,
-            action_dim=action_dim,
+            action_dim=act_dim,
         )
-
-        # ADD THIS RIGHT AFTER:
-        print(f"✅ Agent initialized on: {self.MADRLagent.device}")
-        if self.MADRLagent.device.type == 'cpu':
-            print("   ⚠️  WARNING: Training on CPU will be VERY SLOW!")
-            print("   Enable GPU in Kaggle: Settings → Accelerator → GPU T4 x2")
-
-        # BC weight scheduler
-        self.bc_scheduler = BCWeightScheduler(
-            initial_weight=self.config['bc_regularization']['initial_weight'],      # 100% BC initially
-            final_weight=self.config['bc_regularization']['final_weight'],        # 10% BC finally
-            transition_steps=self.config['bc_regularization']['transition_steps'],
-            schedule_type=self.config['bc_regularization']['schedule_type']
-        )
-
 
         # Load checkpoint if provided
         if checkpoint_path:
             self.MADRLagent.load_models(checkpoint_path)
-            self.MADRLagent.reset_optimizer_state()  # Reset optimizers to avoid issues
+            self.MADRLagent.reset_optimizer_state()  
             print(f"Loaded checkpoint from {checkpoint_path}")
 
-        self.GreedyAgent = GreedyAgent(
-            num_agents=self.config['num_uavs'],
-            obs_dim=obs_dim,
-            action_dim=action_dim,
-            env=self.env
-        )
         self.exploration_num = 1
-
-        # Save config files
-        self._save_config_files()
-
 
         # Visualization        
         self.enable_visualization = enable_visualization
         self.visualizer = None
-        self.toggle_check_interval = toggle_check_interval
+        self.check_interval = check_interval
+
+        # Control file paths
+        self.viz_on_flag = 'viz_on.flag'
+        self.viz_off_flag = 'viz_off.flag'
+        self.quit_flag = 'quit.flag'
         
-        # Initialize visualizer if enabled
-        if self.enable_visualization:
-            self._initialize_visualizer()
+        # Clean up any existing control files
+        self._cleanup_control_files()
+
+        # Clean up any existing control files
+        self._cleanup_control_files()
+
+        self._print_instructions()
         
-        print("\n" + "="*60)
-        print("🎮 VISUALIZER CONTROLS:")
-        print(f"  V       - Toggle visualizer ON/OFF (checked every {toggle_check_interval} steps)")
-        print("  ESC     - Close visualizer (turn off)")
-        print("="*60 + "\n")
+    def _print_instructions(self):
+        """Print control instructions"""
+        print("\n" + "="*70)
+        print("🎮 FILE-BASED CONTROLS:")
+        print("  To toggle visualization ON:  touch viz_on.flag")
+        print("  To toggle visualization OFF: touch viz_off.flag")
+        print("  To quit training:            touch quit.flag")
+        print("")
+        print("  Example from another terminal:")
+        print("    cd /path/to/your/project")
+        print("    touch viz_on.flag    # Turn on visualization")
+        print("    touch viz_off.flag   # Turn off visualization")
+        print("    touch quit.flag      # Stop training")
+        print(f"\n  Files are checked every {self.check_interval} steps")
+        print("="*70 + "\n")
+    
+    def _cleanup_control_files(self):
+        """Remove any existing control files"""
+        for flag in [self.viz_on_flag, self.viz_off_flag, self.quit_flag]:
+            if os.path.exists(flag):
+                os.remove(flag)
+
+    def _check_control_files(self):
+        """Check for control file commands"""
+        # Check for quit command
+        if os.path.exists(self.quit_flag):
+            print("\n🛑 Quit flag detected, stopping training...")
+            os.remove(self.quit_flag)
+            return 'quit'
+        
+        # Check for visualization toggle
+        if os.path.exists(self.viz_on_flag):
+            if not self.enable_visualization:
+                print("\n📺 Visualization ON flag detected, enabling...")
+                self._initialize_visualizer()
+            os.remove(self.viz_on_flag)
+        
+        if os.path.exists(self.viz_off_flag):
+            if self.enable_visualization:
+                print("\n📴 Visualization OFF flag detected, disabling...")
+                self._cleanup_visualizer()
+            os.remove(self.viz_off_flag)
+        
+        return None
+
+    def _create_model_folder(self):
+        os.makedirs(self.config['save_dir'], exist_ok=True)
+
+        model_dir = self.model_dir
+        os.makedirs(model_dir, exist_ok=True)
+        os.makedirs(os.path.join(model_dir, 'training_progress'), exist_ok=True)
+        os.makedirs(os.path.join(model_dir, 'checkpoints'), exist_ok=True)
 
     def _initialize_visualizer(self):
-        """Initialize or reinitialize the visualizer"""
+        """Initialize the visualizer"""
         if self.visualizer is None:
             try:
                 import pygame
@@ -167,9 +196,7 @@ class TrainingManager:
                 self.enable_visualization = False
 
     def _cleanup_visualizer(self):
-        """Cleanup and destroy the visualizer"""
-
-        print("Cleaning up visualizer...")
+        """Cleanup the visualizer"""
         if self.visualizer is not None:
             try:
                 import pygame
@@ -182,22 +209,7 @@ class TrainingManager:
 
     def _handle_visualization_events(self):
         """Handle events - only called periodically"""
-        if not self.enable_visualization and self.visualizer is None:
-            # When OFF: Check for 'V' key to turn on
-            try:
-                import pygame
-                if not pygame.get_init():
-                    pygame.init()
-                
-                for event in pygame.event.get():
-                    if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_v:
-                            self._initialize_visualizer()
-                            return
-            except:
-                pass
-            return
-        
+
         if not self.enable_visualization or self.visualizer is None:
             return
         
@@ -305,27 +317,24 @@ class TrainingManager:
         print(f"✓ Saved config files to {self.model_dir}")
 
     def train(self):
-        """Training loop with PERIODIC event checking"""
-        print(f"Starting training for {self.config['total_training_steps']} steps")
-        print(f"Toggle check interval: every {self.toggle_check_interval} steps")
+        """Main training loop"""
+        print(f"\n🚀 Starting training for {self.config['total_training_steps']} steps")
+        print(f"📁 Saving to: {self.model_dir}\n")
         
         observations = self.env.reset()
         progress_bar = tqdm(range(self.config['total_training_steps']), desc="Training Steps")
         
         for step in progress_bar:
-            # OPTIMIZATION: Only check for toggle every N steps
-            if self.enable_visualization:
-                self._handle_visualization_events()
-            elif step % self.toggle_check_interval == 0:
-                self._handle_visualization_events()
-            # Otherwise: ZERO overhead from event handling!
+            # Periodically check control files
+            if step % self.check_interval == 0:
+                self._check_control_files()
             
-            # if step < self.config['greedy_experience_gathering_steps']:
-            greedy_actions = self.GreedyAgent.select_actions(observations)
+            self._handle_visualization_events()
+            
             actions = self.MADRLagent.select_actions(observations, explore=True)
             
             next_observations, reward, done, info = self.env.step(actions)
-            self.MADRLagent.store_transition(observations, actions, greedy_actions, reward, next_observations, done)
+            self.MADRLagent.store_transition(observations, actions, actions, reward, next_observations, done)
 
             # Check if we should train
             should_train = (
@@ -339,13 +348,10 @@ class TrainingManager:
                 critic_losses = []
                 rl_losses_list = []
                 bc_losses_list = []
-
-                bc_weight = self.bc_scheduler.get_weight()
-                self.bc_scheduler.step()
                 
                 for _ in range(self.config['train_iterations']):
                     train_info = self.MADRLagent.train_rl_with_bc_regularization(
-                        bc_weight=bc_weight
+                        bc_weight=0
                     )
                     if train_info:
                         # Collect losses from all agents
@@ -354,8 +360,6 @@ class TrainingManager:
                         rl_losses_list.append(np.mean(train_info['rl_losses']))
                         bc_losses_list.append(np.mean(train_info['bc_losses']))
                 
-                
-
                 # Store training metrics
                 if actor_losses:  # Only store if training actually happened
                     self.training_metrics['steps'].append(step)
@@ -372,12 +376,12 @@ class TrainingManager:
 
                     self.training_metrics['rl_losses'].append(np.mean(rl_losses_list))
                     self.training_metrics['bc_losses'].append(np.mean(bc_losses_list))
-                    self.training_metrics['bc_weights'].append(bc_weight)
+                    self.training_metrics['bc_weights'].append(0)
                     
                     # Update progress bar with training info
                     progress_bar.set_postfix({
                         'Reward': f'{reward:.3f}',
-                        'BC Weight': f'{bc_weight:.3f}',
+                        'BC Weight': f'{0:.3f}',
                         'Actor Loss': f'{np.mean(actor_losses):.4f}',
                         'RL Loss': f'{np.mean(rl_losses_list):.4f}',
                         'BC Loss': f'{np.mean(bc_losses_list):.4f}',

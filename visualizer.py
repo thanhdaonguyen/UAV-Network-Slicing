@@ -1350,7 +1350,7 @@ def main():
     agent = None
     if args.checkpoint:
         model_dir = args.checkpoint
-        model_checkpoint = "./commit_models/model1/checkpoints/checkpoint_step_400000.pth"
+        model_checkpoint = "./saved_models/model6/checkpoints/checkpoint_step_550000.pth"
         env_config = Configuration("./config/environment/default.yaml")
         num_agents = env_config.system.num_uavs
         obs_dim = 80
@@ -1361,7 +1361,7 @@ def main():
 
     # agent = DynamicHeightGreedyAgent(len(env.uavs), 80, 13, env)
     # agent = RandomAgent(len(env.uavs), 80, 13)
-    agent = CoverageMaximizationGreedyAgent(len(env.uavs), 80, 13, env)
+    # agent = CoverageMaximizationGreedyAgent(len(env.uavs), 80, 13, env)
     
     # Create visualizer with profiling
     visualizer = Network3DVisualizer(

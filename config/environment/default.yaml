@@ -8,7 +8,7 @@ system:
     service_area: [2000, 2000] # [width, height] in meters
     uav_fly_range_x: [0, 2000] # [min, max] radius from center in meters
     uav_fly_range_y: [0, 2000] # [min, max] radius from center in meters
-    uav_fly_range_h: [100, 500] # [min, max] height in meters
+    uav_fly_range_h: [100, 400] # [min, max] height in meters
     num_das_per_slice: 3
 
 # Time parameters
@@ -77,7 +77,7 @@ uav_params:
     velocity_max: 3.0 # m/s maximum movement speed
     initial_power: 5.0 # Initial power setting
     initial_battery: 800000.0 # Initial battery level
-    beam_angle: 45.0 # degrees - Maximum beam angle (half-angle from vertical)
+    beam_angle: 60.0 # degrees - Maximum beam angle (half-angle from vertical)
     buffer_size: 1000000  # bits
 
 # User Equipment dynamics

@@ -1455,7 +1455,7 @@ class EvaluationFramework:
         
         # 6. Summary Bar Chart
         ax = axes[1, 2]
-        metrics_names = ['Total\nReward', 'Mean\nQoS', 'Energy\n(Inverted)', 'Mean\nFairness']
+        metrics_names = ['Total\nReward', 'Mean\nQoS', 'Mean\nEnergy', 'Mean\nFairness']
         x = np.arange(len(metrics_names))
         width = 0.8 / len(results_list)
         
@@ -1465,12 +1465,11 @@ class EvaluationFramework:
             max_reward = max(total_rewards) if max(total_rewards) > 0 else 1
             
             energies = [r['summary']['mean_energy'] for r in results_list]
-            max_energy = max(energies) if max(energies) > 0 else 1
             
             values = [
                 result['summary']['total_reward'] / max_reward,
                 result['summary']['mean_qos'],
-                1 - (result['summary']['mean_energy'] / max_energy),  # Invert energy
+                result['summary']['mean_energy'],  # Invert energy
                 result['summary']['mean_fairness']
             ]
             
@@ -1721,7 +1720,7 @@ def main():
             action_dim=action_dim,
             training=False
         )
-    agent2.load_models('saved_models/model6/checkpoints/checkpoint_step_372000.pth')
+    agent2.load_models('saved_models/model6/checkpoints/checkpoint_step_550000.pth')
     # agents.append((agent2, "MADRL (Model 6)"))
 
     # Evaluate all agents on the same environment
@@ -1752,7 +1751,12 @@ def main():
     print(f"Results saved to: {evaluator.run_dir}")
     print(f"{'='*60}")
 
+def plot(path: str):
+
+    evaluator = EvaluationFramework(env_config_path='config/environment/default.yaml')
+    evaluator.compare_agents(path)
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    plot('baseline_results/run_20251028_121654')
