@@ -105,7 +105,7 @@ class TrainingManager:
         # Load checkpoint if provided
         if checkpoint_path:
             self.MADRLagent.load_models(checkpoint_path)
-            self.MADRLagent.reset_optimizer_state()  
+            # self.MADRLagent.reset_optimizer_state()  
             print(f"Loaded checkpoint from {checkpoint_path}")
 
         self.exploration_num = 1
@@ -417,7 +417,7 @@ class TrainingManager:
                     self.MADRLagent.min_noise,
                     self.MADRLagent.exploration_noise * self.MADRLagent.noise_decay
                 )
-                if self.MADRLagent.exploration_noise == 0.01 and self.exploration_num == 1:
+                if self.MADRLagent.exploration_noise <= self.MADRLagent.min_noise and self.exploration_num == 1:
                     self.MADRLagent.exploration_noise = self.MADRLagent.re_exploration_noise
                     self.exploration_num += 1
 
@@ -941,7 +941,7 @@ def main():
     env_config_file = "config/environment/default.yaml"  # or 'config.json' if you have one
     train_config_file = 'config/train/default.yaml'
     checkpoint_file = None
-    # checkpoint_file = "commit_models/model1/checkpoints/checkpoint_step_400000.pth"  # or specify a checkpoint path if resuming training
+    # checkpoint_file = "saved_models/model9/checkpoints/checkpoint_step_560000.pth"  # or specify a checkpoint path if resuming training
     # Run profiling if specified
     if args.profile:
         # Run profiling instead of training

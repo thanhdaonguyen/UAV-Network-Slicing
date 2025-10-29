@@ -1350,7 +1350,7 @@ def main():
     agent = None
     if args.checkpoint:
         model_dir = args.checkpoint
-        model_checkpoint = "./saved_models/model9/checkpoints/checkpoint_step_330000.pth"
+        model_checkpoint = "./saved_models/model9/checkpoints/checkpoint_step_560000.pth"
         env_config = Configuration("./config/environment/default.yaml")
         num_agents = env_config.system.num_uavs
         obs_dim = 80

@@ -1686,8 +1686,8 @@ def main():
     # smart_greedy_agent = SmartGreedyAgent(num_agents, obs_dim, action_dim, env)
     # agents.append((smart_greedy_agent, "Smart Greedy"))
 
-    # qos_greedy_agent = QoSAwareHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
-    # agents.append((qos_greedy_agent, "QoS-Aware Greedy"))
+    qos_greedy_agent = QoSAwareHeightGreedyAgent(num_agents, obs_dim, action_dim, env)
+    agents.append((qos_greedy_agent, "QoS-Aware Greedy"))
 
     # energy_aware_agent = EnergyAwareGreedyAgent(num_agents, obs_dim, action_dim, env)
     # agents.append((energy_aware_agent, "Energy-Aware Greedy"))
@@ -1720,7 +1720,7 @@ def main():
             action_dim=action_dim,
             training=False
         )
-    agent2.load_models('saved_models/model6/checkpoints/checkpoint_step_550000.pth')
+    agent2.load_models('saved_models/model9/checkpoints/checkpoint_step_560000.pth')
     # agents.append((agent2, "MADRL (Model 6)"))
 
     # Evaluate all agents on the same environment
@@ -1758,5 +1758,5 @@ def plot(path: str):
 
 
 if __name__ == "__main__":
-    # main()
-    plot('baseline_results/run_20251028_121654')
+    main()
+    # plot('baseline_results/run_20251028_121654')
